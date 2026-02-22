@@ -1,7 +1,6 @@
 import os
 import discord
 from discord.ext import commands, tasks
-from discord import app_commands
 import datetime
 import pytz
 import random
@@ -28,7 +27,8 @@ tree = bot.tree
 
 # ---------------- DATABASE ----------------
 
-conn = sqlite3.connect("patrol_stats.db")
+conn = sqlite3.connect(os.getenv("DATABASE_PATH", "patrol_stats.db"))
+conn.execute("PRAGMA journal_mode=WAL")
 cursor = conn.cursor()
 
 cursor.execute("""
@@ -57,6 +57,17 @@ area TEXT
 """)
 
 conn.commit()
+
+
+def ensure_member(user_id):
+    cursor.execute("INSERT OR IGNORE INTO members(user_id) VALUES(?)", (user_id,))
+    conn.commit()
+
+
+def record_stat(user_id, column):
+    ensure_member(user_id)
+    cursor.execute(f"UPDATE members SET {column} = {column} + 1 WHERE user_id = ?", (user_id,))
+    conn.commit()
 
 
 # ---------------- VARIABLES ----------------
@@ -121,9 +132,11 @@ class PatrolButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
 
+        cant_make_votes.discard(interaction.user.id)
         patrol_votes[interaction.user.id] = self.time
+        record_stat(interaction.user.id, "patrol_votes")
 
-        await interaction.response.defer()
+        await interaction.response.send_message(f"You voted for **{self.time}**.", ephemeral=True)
 
 
 class CantMakeButton(discord.ui.Button):
@@ -138,9 +151,11 @@ class CantMakeButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
 
+        patrol_votes.pop(interaction.user.id, None)
         cant_make_votes.add(interaction.user.id)
+        record_stat(interaction.user.id, "cant_make")
 
-        await interaction.response.defer()
+        await interaction.response.send_message("You marked **Can't Make It**.", ephemeral=True)
 
 
 class AOPView(discord.ui.View):
@@ -169,8 +184,9 @@ class AOPButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
 
         aop_votes[interaction.user.id] = self.option
+        record_stat(interaction.user.id, "aop_votes")
 
-        await interaction.response.defer()
+        await interaction.response.send_message(f"You voted for **{self.option}**.", ephemeral=True)
 
 
 # ---------------- BOT READY ----------------
@@ -183,6 +199,7 @@ async def on_ready():
     scheduler.start()
     close_votes.start()
 
+    tree.copy_global_to(guild=discord.Object(id=GUILD_ID))
     await tree.sync(guild=discord.Object(id=GUILD_ID))
 
 
@@ -274,6 +291,18 @@ async def close_votes():
             selected_aop = max(counts, key=counts.get)
 
 
+        today = now.strftime("%Y-%m-%d")
+        cursor.execute("INSERT INTO patrol_days(day, attendance) VALUES(?, ?)", (today, len(patrol_votes)))
+        cursor.execute("INSERT INTO aop_stats(area) VALUES(?)", (selected_aop,))
+
+        for user_id in patrol_votes:
+            record_stat(user_id, "patrol_attended")
+
+        for user_id in cant_make_votes:
+            record_stat(user_id, "patrol_skipped")
+
+        conn.commit()
+
         embed = discord.Embed(
             title="🚓 Patrol Confirmed",
             color=discord.Color.green()
@@ -312,8 +341,8 @@ async def cancel_patrol(interaction: discord.Interaction):
         color=discord.Color.red()
     )
 
-    await interaction.channel.send(embed=embed)
     await interaction.response.send_message("Patrol cancelled.", ephemeral=True)
+    await interaction.channel.send(embed=embed)
 
 
 @tree.command(name="override_patrol_time")
@@ -329,8 +358,8 @@ async def override_patrol_time(interaction: discord.Interaction, time:str):
         color=discord.Color.gold()
     )
 
-    await interaction.channel.send(embed=embed)
     await interaction.response.send_message("Override sent.", ephemeral=True)
+    await interaction.channel.send(embed=embed)
 
 
 @tree.command(name="mapLC")
