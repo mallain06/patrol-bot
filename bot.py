@@ -362,7 +362,7 @@ async def override_patrol_time(interaction: discord.Interaction, time:str):
     await interaction.channel.send(embed=embed)
 
 
-@tree.command(name="mapLC")
+@tree.command(name="maplc")
 async def map_lc(interaction: discord.Interaction):
 
     global current_map
@@ -375,7 +375,7 @@ async def map_lc(interaction: discord.Interaction):
     await interaction.response.send_message("Map switched to LC.")
 
 
-@tree.command(name="mapLS")
+@tree.command(name="mapls")
 async def map_ls(interaction: discord.Interaction):
 
     global current_map
