@@ -1,0 +1,6 @@
+*.db
+.git
+.github
+__pycache__
+.dockerignore
+Dockerfile
