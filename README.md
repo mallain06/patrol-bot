@@ -33,7 +33,8 @@ All commands require the admin role and must be used in the admin command channe
 | `GUILD_ID` | Discord server ID |
 | `PATROL_CHANNEL_ID` | Channel for patrol voting and announcements |
 | `AOP_CHANNEL_ID` | Channel for AOP voting and overrides |
-| `BRIEFING_CHANNEL_ID` | Channel for briefing reminders |
+| `BRIEFING_CHANNEL_ID` | Text channel for briefing reminders |
+| `BRIEFING_VOICE_CHANNEL_ID` | Voice channel linked in briefing reminders |
 | `STATS_CHANNEL_ID` | Channel for biweekly stats leaderboard |
 | `ADMIN_COMMAND_CHANNEL` | Channel where admin commands are allowed |
 | `PING_ROLE_ID` | Role to ping for voting and briefing reminders |
@@ -51,6 +52,7 @@ docker run -d \
   -e PATROL_CHANNEL_ID=123456789 \
   -e AOP_CHANNEL_ID=123456789 \
   -e BRIEFING_CHANNEL_ID=123456789 \
+  -e BRIEFING_VOICE_CHANNEL_ID=123456789 \
   -e STATS_CHANNEL_ID=123456789 \
   -e ADMIN_COMMAND_CHANNEL=123456789 \
   -e PING_ROLE_ID=123456789 \
