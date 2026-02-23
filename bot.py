@@ -12,6 +12,7 @@ GUILD_ID = int(os.getenv("GUILD_ID", 0))
 PATROL_CHANNEL_ID = int(os.getenv("PATROL_CHANNEL_ID", 0))
 AOP_CHANNEL_ID = int(os.getenv("AOP_CHANNEL_ID", 0))
 BRIEFING_CHANNEL_ID = int(os.getenv("BRIEFING_CHANNEL_ID", 0))
+BRIEFING_VOICE_CHANNEL_ID = int(os.getenv("BRIEFING_VOICE_CHANNEL_ID", 0))
 STATS_CHANNEL_ID = int(os.getenv("STATS_CHANNEL_ID", 0))
 ADMIN_COMMAND_CHANNEL = int(os.getenv("ADMIN_COMMAND_CHANNEL", 0))
 
@@ -360,7 +361,7 @@ async def briefing_reminder():
 
         embed = discord.Embed(
             title="📋 Briefing Reminder",
-            description=f"Patrol starts in **10 minutes** at **{confirmed_start_time}**.\nPlease join the briefing voice chat now.",
+            description=f"Patrol starts in **10 minutes** at **{confirmed_start_time}**.\nJoin the briefing: <#{BRIEFING_VOICE_CHANNEL_ID}>",
             color=discord.Color.orange()
         )
 
