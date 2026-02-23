@@ -664,4 +664,176 @@ async def stats_checker():
     await post_stats_leaderboard()
 
 
+# ---------------- TEST COMMANDS ----------------
+
+@tree.command(name="test_patrol_vote")
+async def test_patrol_vote(interaction: discord.Interaction):
+
+    if not admin_check(interaction):
+        await interaction.response.send_message("No permission.", ephemeral=True)
+        return
+
+    patrol_channel = bot.get_channel(PATROL_CHANNEL_ID)
+
+    embed = discord.Embed(
+        title="🚓 Patrol Attendance (TEST)",
+        description="Vote for tonight's patrol start time.\nMinimum **4 members required**.",
+        color=discord.Color.blue()
+    )
+
+    role = f"<@&{PING_ROLE_ID}>"
+    await patrol_channel.send(role, embed=embed, view=PatrolView())
+    await interaction.response.send_message("Test patrol vote posted.", ephemeral=True)
+
+
+@tree.command(name="test_aop_vote")
+async def test_aop_vote(interaction: discord.Interaction):
+
+    if not admin_check(interaction):
+        await interaction.response.send_message("No permission.", ephemeral=True)
+        return
+
+    aop_channel = bot.get_channel(AOP_CHANNEL_ID)
+
+    embed = discord.Embed(
+        title="🗺️ AOP Voting (TEST)",
+        description="Vote for tonight's patrol area.",
+        color=discord.Color.purple()
+    )
+
+    await aop_channel.send(embed=embed, view=AOPView())
+    await interaction.response.send_message("Test AOP vote posted.", ephemeral=True)
+
+
+@tree.command(name="test_close_votes")
+async def test_close_votes(interaction: discord.Interaction):
+
+    if not admin_check(interaction):
+        await interaction.response.send_message("No permission.", ephemeral=True)
+        return
+
+    patrol_channel = bot.get_channel(PATROL_CHANNEL_ID)
+
+    attendance_counts = {time: 0 for time in time_slots}
+    for vote in patrol_votes.values():
+        attendance_counts[vote] += 1
+
+    cumulative = 0
+    start_time = None
+
+    for time in time_slots:
+        cumulative += attendance_counts[time]
+        if cumulative >= MINIMUM_PATROL:
+            start_time = time
+            break
+
+    if not start_time:
+        embed = discord.Embed(
+            title="❌ Patrol Cancelled (TEST)",
+            description="Minimum attendance not reached.",
+            color=discord.Color.red()
+        )
+        await patrol_channel.send(embed=embed)
+        await interaction.response.send_message("Test close votes: patrol cancelled (not enough votes).", ephemeral=True)
+        return
+
+    if not aop_votes:
+        options = mapLC if current_map == "LC" else mapLS
+        selected_aop = random.choice(options)
+    else:
+        counts = {}
+        for vote in aop_votes.values():
+            counts[vote] = counts.get(vote, 0) + 1
+        selected_aop = max(counts, key=counts.get)
+
+    global confirmed_start_time
+    confirmed_start_time = start_time
+
+    embed = discord.Embed(
+        title="🚓 Patrol Confirmed (TEST)",
+        color=discord.Color.green()
+    )
+
+    embed.add_field(name="AOP", value=selected_aop)
+    embed.add_field(name="Members Attending", value=str(len(patrol_votes)))
+    embed.add_field(name="Minimum Required", value=str(MINIMUM_PATROL))
+    embed.add_field(name="Start Time", value=start_time)
+
+    await patrol_channel.send(embed=embed)
+    await interaction.response.send_message(f"Test close votes: patrol confirmed at {start_time}, AOP: {selected_aop}.", ephemeral=True)
+
+
+@tree.command(name="test_briefing")
+async def test_briefing(interaction: discord.Interaction):
+
+    if not admin_check(interaction):
+        await interaction.response.send_message("No permission.", ephemeral=True)
+        return
+
+    role = f"<@&{PING_ROLE_ID}>"
+    channel = bot.get_channel(BRIEFING_CHANNEL_ID)
+
+    time_display = confirmed_start_time or "7:00 PM EST"
+
+    embed = discord.Embed(
+        title="📋 Briefing Reminder (TEST)",
+        description=f"Patrol starts in **10 minutes** at **{time_display}**.\nJoin the briefing: <#{BRIEFING_VOICE_CHANNEL_ID}>",
+        color=discord.Color.orange()
+    )
+
+    await channel.send(role, embed=embed)
+    await interaction.response.send_message("Test briefing reminder posted.", ephemeral=True)
+
+
+@tree.command(name="test_cancel")
+async def test_cancel(interaction: discord.Interaction):
+
+    if not admin_check(interaction):
+        await interaction.response.send_message("No permission.", ephemeral=True)
+        return
+
+    embed = discord.Embed(
+        title="❌ Patrol Cancelled (TEST)",
+        description="Cancelled by administration.",
+        color=discord.Color.red()
+    )
+
+    await bot.get_channel(PATROL_CHANNEL_ID).send(embed=embed)
+    await interaction.response.send_message("Test cancel posted.", ephemeral=True)
+
+
+@tree.command(name="test_override_time")
+async def test_override_time(interaction: discord.Interaction, time: str):
+
+    if not admin_check(interaction):
+        await interaction.response.send_message("No permission.", ephemeral=True)
+        return
+
+    embed = discord.Embed(
+        title="⚠️ Patrol Override (TEST)",
+        description=f"Patrol will begin at **{time}**",
+        color=discord.Color.gold()
+    )
+
+    await bot.get_channel(PATROL_CHANNEL_ID).send(embed=embed)
+    await interaction.response.send_message("Test time override posted.", ephemeral=True)
+
+
+@tree.command(name="test_override_aop")
+async def test_override_aop(interaction: discord.Interaction, area: str):
+
+    if not admin_check(interaction):
+        await interaction.response.send_message("No permission.", ephemeral=True)
+        return
+
+    embed = discord.Embed(
+        title="⚠️ AOP Override (TEST)",
+        description=f"AOP has been set to **{area}**",
+        color=discord.Color.gold()
+    )
+
+    await bot.get_channel(AOP_CHANNEL_ID).send(embed=embed)
+    await interaction.response.send_message("Test AOP override posted.", ephemeral=True)
+
+
 bot.run(TOKEN)
