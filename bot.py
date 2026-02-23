@@ -9,7 +9,8 @@ import sqlite3
 TOKEN = os.getenv("TOKEN")
 
 GUILD_ID = int(os.getenv("GUILD_ID", 0))
-VOTE_CHANNEL_ID = int(os.getenv("VOTE_CHANNEL_ID", 0))
+PATROL_CHANNEL_ID = int(os.getenv("PATROL_CHANNEL_ID", 0))
+AOP_CHANNEL_ID = int(os.getenv("AOP_CHANNEL_ID", 0))
 BRIEFING_CHANNEL_ID = int(os.getenv("BRIEFING_CHANNEL_ID", 0))
 STATS_CHANNEL_ID = int(os.getenv("STATS_CHANNEL_ID", 0))
 ADMIN_COMMAND_CHANNEL = int(os.getenv("ADMIN_COMMAND_CHANNEL", 0))
@@ -216,7 +217,8 @@ async def scheduler():
         cant_make_votes.clear()
         aop_votes.clear()
 
-        channel = bot.get_channel(VOTE_CHANNEL_ID)
+        patrol_channel = bot.get_channel(PATROL_CHANNEL_ID)
+        aop_channel = bot.get_channel(AOP_CHANNEL_ID)
 
         role = f"<@&{PING_ROLE_ID}>"
 
@@ -226,7 +228,7 @@ async def scheduler():
             color=discord.Color.blue()
         )
 
-        await channel.send(role, embed=embed, view=PatrolView())
+        await patrol_channel.send(role, embed=embed, view=PatrolView())
 
         aop_embed = discord.Embed(
             title="🗺️ AOP Voting",
@@ -234,7 +236,7 @@ async def scheduler():
             color=discord.Color.purple()
         )
 
-        await channel.send(embed=aop_embed, view=AOPView())
+        await aop_channel.send(embed=aop_embed, view=AOPView())
 
 
 # ---------------- CLOSE VOTES ----------------
@@ -246,7 +248,7 @@ async def close_votes():
 
     if now.hour == 18 and now.minute == 30:
 
-        channel = bot.get_channel(VOTE_CHANNEL_ID)
+        patrol_channel = bot.get_channel(PATROL_CHANNEL_ID)
 
         attendance_counts = {time:0 for time in time_slots}
 
@@ -272,7 +274,7 @@ async def close_votes():
                 color=discord.Color.red()
             )
 
-            await channel.send(embed=embed)
+            await patrol_channel.send(embed=embed)
             return
 
 
@@ -313,7 +315,7 @@ async def close_votes():
         embed.add_field(name="Minimum Required", value=str(MINIMUM_PATROL))
         embed.add_field(name="Start Time", value=start_time)
 
-        await channel.send(embed=embed)
+        await patrol_channel.send(embed=embed)
 
 
 # ---------------- ADMIN CHECK ----------------
@@ -342,7 +344,7 @@ async def cancel_patrol(interaction: discord.Interaction):
     )
 
     await interaction.response.send_message("Patrol cancelled.", ephemeral=True)
-    await interaction.channel.send(embed=embed)
+    await bot.get_channel(PATROL_CHANNEL_ID).send(embed=embed)
 
 
 @tree.command(name="override_patrol_time")
@@ -359,7 +361,7 @@ async def override_patrol_time(interaction: discord.Interaction, time:str):
     )
 
     await interaction.response.send_message("Override sent.", ephemeral=True)
-    await interaction.channel.send(embed=embed)
+    await bot.get_channel(PATROL_CHANNEL_ID).send(embed=embed)
 
 
 @tree.command(name="maplc")
