@@ -344,7 +344,7 @@ def build_patrol_embed(title="🚓 Patrol Attendance"):
 
 def build_aop_embed(title="🗺️ AOP Voting"):
 
-    map_name = "Liberty County" if current_map == "LC" else "Lander State"
+    map_name = "Liberty City" if current_map == "LC" else "Los Santos"
     desc = f"Vote for tonight's patrol area.\n📍 **Current Map:** {map_name}\n\n"
 
     options = mapLC if current_map == "LC" else mapLS
@@ -1412,8 +1412,8 @@ async def aop_breakdown(interaction: discord.Interaction, period: Period = Perio
     embeds = []
 
     for map_name, map_rows, map_areas in [
-        ("Liberty County", lc_rows, mapLC),
-        ("Lander State", ls_rows, mapLS),
+        ("Liberty City", lc_rows, mapLC),
+        ("Los Santos", ls_rows, mapLS),
     ]:
         if not map_rows:
             continue
@@ -1927,6 +1927,7 @@ async def test_inactivity(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     await send_paginated(interaction.channel, "⚠️ Inactive Members (TEST)", lines, discord.Color.red())
     await interaction.followup.send(f"Found {len(inactive)} inactive members.", ephemeral=True)
+
 
 
 bot.run(TOKEN)
