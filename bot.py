@@ -637,29 +637,57 @@ async def force_stats(interaction: discord.Interaction):
 
 
 @tree.command(name="user_stats")
-async def user_stats(interaction: discord.Interaction, member: discord.Member):
+async def user_stats(interaction: discord.Interaction, member: discord.Member, period: Period = Period.all_time):
 
     if not admin_check(interaction):
         await interaction.response.send_message("No permission.", ephemeral=True)
         return
 
-    cursor.execute(
-        "SELECT patrol_votes, patrol_attended, aop_votes, cant_make, patrol_skipped, aop_skipped FROM members WHERE user_id = ?",
-        (member.id,)
-    )
-    row = cursor.fetchone()
+    cutoff = get_cutoff(period)
 
-    if not row:
-        await interaction.response.send_message(f"No data found for {member.display_name}.", ephemeral=True)
-        return
+    if cutoff:
+        cursor.execute(
+            "SELECT "
+            "COALESCE(SUM(CASE WHEN action = 'patrol_vote' THEN 1 ELSE 0 END), 0), "
+            "COALESCE(SUM(CASE WHEN action = 'cant_make' THEN 1 ELSE 0 END), 0), "
+            "COALESCE(SUM(CASE WHEN action = 'aop_vote' THEN 1 ELSE 0 END), 0) "
+            "FROM activity_log WHERE user_id = ? AND day >= ?",
+            (member.id, cutoff)
+        )
+        row = cursor.fetchone()
+        p_votes, cant, a_votes = row
+        p_attended = p_votes
+        p_skip = cant
+        a_skip = 0
+    else:
+        cursor.execute(
+            "SELECT patrol_votes, patrol_attended, aop_votes, cant_make, patrol_skipped, aop_skipped FROM members WHERE user_id = ?",
+            (member.id,)
+        )
+        row = cursor.fetchone()
 
-    p_votes, p_attended, a_votes, cant, p_skip, a_skip = row
+        if not row:
+            await interaction.response.send_message(f"No data found for {member.display_name}.", ephemeral=True)
+            return
+
+        p_votes, p_attended, a_votes, cant, p_skip, a_skip = row
 
     total_responses = p_attended + cant + p_skip
     attend_rate = (p_attended / total_responses * 100) if total_responses > 0 else 0
 
+    # Last activity
+    cursor.execute("SELECT day, action FROM activity_log WHERE user_id = ? ORDER BY day DESC LIMIT 1", (member.id,))
+    last_row = cursor.fetchone()
+    last_activity = f"{last_row[0]} ({last_row[1].replace('_', ' ')})" if last_row else "Never"
+
+    # Days since last activity
+    if last_row:
+        last_date = datetime.datetime.strptime(last_row[0], "%Y-%m-%d").date()
+        days_ago = (datetime.datetime.now(TIMEZONE).date() - last_date).days
+        last_activity += f" ({days_ago}d ago)"
+
     embed = discord.Embed(
-        title=f"📋 Stats for {member.display_name}",
+        title=f"📋 Stats for {member.display_name} ({period_label(period)})",
         color=member.color if member.color != discord.Color.default() else discord.Color.blue()
     )
 
@@ -671,9 +699,52 @@ async def user_stats(interaction: discord.Interaction, member: discord.Member):
     embed.add_field(name="AOP Votes", value=str(a_votes), inline=True)
     embed.add_field(name="Can't Make It", value=str(cant), inline=True)
     embed.add_field(name="Patrol Skipped", value=str(p_skip), inline=True)
-    embed.add_field(name="AOP Skipped", value=str(a_skip), inline=True)
+    embed.add_field(name="Last Activity", value=last_activity, inline=False)
 
     await interaction.response.send_message(embed=embed)
+
+
+@tree.command(name="check_inactive")
+async def check_inactive(interaction: discord.Interaction):
+
+    if not admin_check(interaction):
+        await interaction.response.send_message("No permission.", ephemeral=True)
+        return
+
+    now = datetime.datetime.now(TIMEZONE)
+    two_weeks_ago = (now.date() - datetime.timedelta(days=14)).strftime("%Y-%m-%d")
+
+    cursor.execute("SELECT DISTINCT user_id FROM activity_log WHERE day >= ?", (two_weeks_ago,))
+    active_users = {r[0] for r in cursor.fetchall()}
+
+    guild = bot.get_guild(GUILD_ID)
+    ping_role = guild.get_role(PING_ROLE_ID)
+
+    if not ping_role:
+        await interaction.response.send_message("Ping role not found.", ephemeral=True)
+        return
+
+    inactive = [m for m in ping_role.members if not m.bot and m.id not in active_users]
+
+    if not inactive:
+        await interaction.response.send_message("No inactive members in the last 2 weeks.", ephemeral=True)
+        return
+
+    lines = []
+    for i, m in enumerate(inactive, 1):
+        cursor.execute("SELECT day FROM activity_log WHERE user_id = ? ORDER BY day DESC LIMIT 1", (m.id,))
+        last = cursor.fetchone()
+        if last:
+            last_date = datetime.datetime.strptime(last[0], "%Y-%m-%d").date()
+            days_ago = (now.date() - last_date).days
+            last_str = f"last active {days_ago}d ago"
+        else:
+            last_str = "never active"
+        lines.append(f"**{i}. {m.display_name}** (<@{m.id}>) — {last_str}")
+
+    await interaction.response.defer()
+    await send_paginated(interaction.channel, f"⚠️ Inactive Members ({len(inactive)} total)", lines, discord.Color.red())
+    await interaction.followup.send(f"Found **{len(inactive)}** inactive members.", ephemeral=True)
 
 
 def get_cutoff(period: Period):
@@ -872,22 +943,24 @@ async def aop_breakdown(interaction: discord.Interaction, period: Period = Perio
     sorted_aops = sorted(aop_counts.items(), key=lambda x: x[1], reverse=True)
     aop_lines = [f"**{area}** — {count} times ({count / total * 100:.0f}%)" for area, count in sorted_aops]
 
-    # By day of week
-    aop_day_data = {}
+    # Most popular AOP per day of week
+    day_aop_data = {}
     for area, day_str in aop_rows:
         if not day_str:
             continue
         dt = datetime.datetime.strptime(day_str, "%Y-%m-%d")
         dow = day_names[dt.weekday()]
-        if area not in aop_day_data:
-            aop_day_data[area] = {}
-        aop_day_data[area][dow] = aop_day_data[area].get(dow, 0) + 1
+        if dow not in day_aop_data:
+            day_aop_data[dow] = {}
+        day_aop_data[dow][area] = day_aop_data[dow].get(area, 0) + 1
 
     aop_day_lines = []
-    for area in sorted(aop_day_data.keys()):
-        days = aop_day_data[area]
-        top_day = max(days, key=days.get)
-        aop_day_lines.append(f"**{area}** — most popular on **{top_day}** ({days[top_day]} times)")
+    for day in day_names:
+        if day not in day_aop_data:
+            continue
+        areas = day_aop_data[day]
+        top_area = max(areas, key=areas.get)
+        aop_day_lines.append(f"**{day}** — **{top_area}** ({areas[top_area]} times)")
 
     embed = discord.Embed(
         title=f"🗺️ AOP Breakdown ({period_label(period)})",
@@ -901,7 +974,7 @@ async def aop_breakdown(interaction: discord.Interaction, period: Period = Perio
     )
 
     embed.add_field(
-        name="Most Popular Day per AOP",
+        name="Most Popular AOP per Day",
         value="\n".join(aop_day_lines) if aop_day_lines else "No data",
         inline=False
     )
