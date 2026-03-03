@@ -109,6 +109,8 @@ confirmed_start_time = None
 
 patrol_message = None
 aop_message = None
+patrol_embed_title = "🚓 Patrol Attendance"
+aop_embed_title = "🗺️ AOP Voting"
 
 current_map = "LC"
 
@@ -182,12 +184,12 @@ def build_aop_embed(title="🗺️ AOP Voting"):
 
 async def update_patrol_message():
     if patrol_message:
-        await patrol_message.edit(embed=build_patrol_embed())
+        await patrol_message.edit(embed=build_patrol_embed(patrol_embed_title))
 
 
 async def update_aop_message():
     if aop_message:
-        await aop_message.edit(embed=build_aop_embed())
+        await aop_message.edit(embed=build_aop_embed(aop_embed_title))
 
 
 # ---------------- VIEWS ----------------
@@ -301,19 +303,21 @@ async def scheduler():
 
     if now.hour == 8 and now.minute == 0:
 
-        global confirmed_start_time, patrol_message, aop_message
+        global confirmed_start_time, patrol_message, aop_message, patrol_embed_title, aop_embed_title
         patrol_votes.clear()
         cant_make_votes.clear()
         aop_votes.clear()
         confirmed_start_time = None
+        patrol_embed_title = "🚓 Patrol Attendance"
+        aop_embed_title = "🗺️ AOP Voting"
 
         patrol_channel = bot.get_channel(PATROL_CHANNEL_ID)
         aop_channel = bot.get_channel(AOP_CHANNEL_ID)
 
         role = f"<@&{PING_ROLE_ID}>"
 
-        patrol_message = await patrol_channel.send(role, embed=build_patrol_embed(), view=PatrolView())
-        aop_message = await aop_channel.send(embed=build_aop_embed(), view=AOPView())
+        patrol_message = await patrol_channel.send(role, embed=build_patrol_embed(patrol_embed_title), view=PatrolView())
+        aop_message = await aop_channel.send(embed=build_aop_embed(aop_embed_title), view=AOPView())
 
 
 # ---------------- CLOSE VOTES ----------------
@@ -854,11 +858,12 @@ async def test_patrol_vote(interaction: discord.Interaction):
         await interaction.response.send_message("No permission.", ephemeral=True)
         return
 
-    global patrol_message
+    global patrol_message, patrol_embed_title
+    patrol_embed_title = "🚓 Patrol Attendance (TEST)"
     patrol_channel = bot.get_channel(PATROL_CHANNEL_ID)
 
     role = f"<@&{PING_ROLE_ID}>"
-    patrol_message = await patrol_channel.send(role, embed=build_patrol_embed("🚓 Patrol Attendance (TEST)"), view=PatrolView())
+    patrol_message = await patrol_channel.send(role, embed=build_patrol_embed(patrol_embed_title), view=PatrolView())
     await interaction.response.send_message("Test patrol vote posted.", ephemeral=True)
 
 
@@ -869,10 +874,11 @@ async def test_aop_vote(interaction: discord.Interaction):
         await interaction.response.send_message("No permission.", ephemeral=True)
         return
 
-    global aop_message
+    global aop_message, aop_embed_title
+    aop_embed_title = "🗺️ AOP Voting (TEST)"
     aop_channel = bot.get_channel(AOP_CHANNEL_ID)
 
-    aop_message = await aop_channel.send(embed=build_aop_embed("🗺️ AOP Voting (TEST)"), view=AOPView())
+    aop_message = await aop_channel.send(embed=build_aop_embed(aop_embed_title), view=AOPView())
     await interaction.response.send_message("Test AOP vote posted.", ephemeral=True)
 
 
