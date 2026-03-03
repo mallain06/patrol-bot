@@ -5,17 +5,20 @@ A Discord bot for managing daily patrol scheduling, AOP (Area of Patrol) voting,
 ## Features
 
 - **Daily Patrol Voting** — Members vote for a patrol start time each morning. Votes close at 6:30 PM EST with a minimum attendance threshold.
-- **AOP Voting** — Members vote on the patrol area. Supports LC and LS map sets, switchable by admins.
-- **Persistent Session State** — Votes, messages, and voting status survive bot restarts via SQLite persistence.
+- **AOP Voting** — Members vote on the patrol area. Supports Liberty County (LC) and Lander State (LS) map sets, switchable by admins.
+- **Persistent Session State** — Votes, messages, and voting status survive bot restarts via SQLite persistence. Buttons remain functional after a restart.
 - **Briefing Reminder** — Automatically pings 10 minutes before the confirmed patrol start time to join the briefing voice chat.
 - **Cancel Announcements** — Cancelling a patrol notifies the announcement channel and edits any existing announcement.
 - **Smart Map Switching** — Changing the map while AOP voting is open resets votes and refreshes buttons automatically.
 - **Duplicate Vote Protection** — Changing your vote doesn't inflate stat counters; only the first vote is tracked.
 - **Command Autocomplete** — Time slots and area names are suggested as you type in slash commands.
 - **Biweekly Stats Leaderboard** — Posts a ranked leaderboard to the stats channel every 14 days.
+- **Inactivity Tracking** — Automatically detects members who haven't responded in 2 weeks and posts reports.
 - **Admin Commands** — Cancel patrols, override start times/AOP, view per-user and server-wide statistics.
 
 ## Commands
+
+### Voting
 
 | Command | Description |
 |---|---|
@@ -23,21 +26,49 @@ A Discord bot for managing daily patrol scheduling, AOP (Area of Patrol) voting,
 | `/open_patrol_vote` | Open patrol voting only |
 | `/open_aop_vote` | Open AOP voting only |
 | `/close_patrol_votes` | Close patrol votes and determine start time |
-| `/close_aop_votes` | Close AOP votes and announce the winner |
+| `/close_aop_votes` | Close AOP votes, announce the winner, and update the announcement |
+
+### Patrol Management
+
+| Command | Description |
+|---|---|
 | `/start_patrol <time> <area>` | Force start a patrol with a specific time and area |
-| `/cancel_patrol` | Cancel tonight's patrol and notify announcement channel |
+| `/cancel_patrol` | Cancel tonight's patrol and notify the announcement channel |
 | `/override_patrol_time <time>` | Override the patrol start time |
 | `/override_aop <area>` | Override the AOP |
-| `/maplc` | Switch AOP options to LC map (resets AOP votes if open) |
-| `/mapls` | Switch AOP options to LS map (resets AOP votes if open) |
-| `/user_stats <member>` | View a specific member's statistics |
-| `/server_stats` | View server-wide patrol statistics |
-| `/activity_stats` | View cancellation and no-show statistics |
-| `/aop_breakdown` | View AOP popularity breakdown |
-| `/check_inactive` | List inactive members from the last 2 weeks |
+| `/maplc` | Switch AOP options to Liberty County (resets AOP votes if open) |
+| `/mapls` | Switch AOP options to Lander State (resets AOP votes if open) |
+
+### Statistics
+
+| Command | Description |
+|---|---|
+| `/user_stats <member> [period]` | View a member's vote counts, attendance rate, and last activity |
+| `/server_stats [period]` | View total patrols, average attendance, and breakdown by day of week |
+| `/activity_stats [period]` | View cancellation rate, no-show rate, and per-day breakdown |
+| `/aop_breakdown [period]` | View AOP popularity split by map (LC and LS), with per-day favorites and unused areas |
+| `/check_inactive` | List members with the ping role who haven't responded in the last 2 weeks |
 | `/force_stats` | Manually post the biweekly stats leaderboard |
 
+All stats commands support an optional `period` parameter: **All Time** (default) or **Last 2 Weeks**.
+
 All commands require the admin role and must be used in the admin command channel.
+
+## How It Works
+
+1. **8:00 AM EST** — The bot automatically posts patrol and AOP votes with interactive buttons.
+2. Members click buttons to vote for a start time or mark "Can't Make It", and vote for an AOP area.
+3. **6:30 PM EST** — Voting closes automatically. If minimum attendance is met, the patrol is confirmed and an announcement is posted. Otherwise, it's cancelled.
+4. **10 minutes before patrol** — A briefing reminder is sent to the briefing channel.
+5. Admins can override times/AOP, cancel, or force-start patrols at any time.
+
+## Maps
+
+### Liberty County (LC)
+Toronto Downtown, Toronto Etobicoke, York Region, Peel Region, Halton Region, Steeltown
+
+### Lander State (LS)
+City of Orillia, City of Barrie, Simcoe County Central, Kawartha Lakes, Peterborough, Northumberland, Prince Edward County
 
 ## Environment Variables
 
@@ -45,11 +76,12 @@ All commands require the admin role and must be used in the admin command channe
 |---|---|
 | `TOKEN` | Discord bot token |
 | `GUILD_ID` | Discord server ID |
-| `PATROL_CHANNEL_ID` | Channel for patrol voting and announcements |
-| `AOP_CHANNEL_ID` | Channel for AOP voting and overrides |
+| `PATROL_CHANNEL_ID` | Channel for patrol voting |
+| `AOP_CHANNEL_ID` | Channel for AOP voting |
 | `BRIEFING_CHANNEL_ID` | Text channel for briefing reminders |
 | `BRIEFING_VOICE_CHANNEL_ID` | Voice channel linked in briefing reminders |
-| `STATS_CHANNEL_ID` | Channel for biweekly stats leaderboard |
+| `STATS_CHANNEL_ID` | Channel for biweekly stats leaderboard and inactivity reports |
+| `ANNOUNCEMENT_CHANNEL_ID` | Channel for patrol confirmed/cancelled announcements |
 | `ADMIN_COMMAND_CHANNEL` | Channel where admin commands are allowed |
 | `PING_ROLE_ID` | Role to ping for voting and briefing reminders |
 | `ADMIN_ROLE_ID` | Role required to use admin commands |
@@ -68,6 +100,7 @@ docker run -d \
   -e BRIEFING_CHANNEL_ID=123456789 \
   -e BRIEFING_VOICE_CHANNEL_ID=123456789 \
   -e STATS_CHANNEL_ID=123456789 \
+  -e ANNOUNCEMENT_CHANNEL_ID=123456789 \
   -e ADMIN_COMMAND_CHANNEL=123456789 \
   -e PING_ROLE_ID=123456789 \
   -e ADMIN_ROLE_ID=123456789 \
