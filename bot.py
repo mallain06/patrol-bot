@@ -822,6 +822,8 @@ async def close_aop_votes(interaction: discord.Interaction):
         await interaction.response.send_message("No permission.", ephemeral=True)
         return
 
+    global announcement_message
+
     now = datetime.datetime.now(TIMEZONE)
     today = now.strftime("%Y-%m-%d")
 
@@ -862,7 +864,7 @@ async def close_aop_votes(interaction: discord.Interaction):
                     new_lines.insert(i + 1, f"📍 **AOP:** {selected_aop}")
                     break
         new_embed = styled_embed("🚓 Tonight's Patrol is Confirmed!", "\n".join(new_lines), discord.Color.green())
-        await announcement_message.edit(embed=new_embed)
+        announcement_message = await announcement_message.edit(embed=new_embed)
 
     await interaction.response.send_message(f"AOP votes closed — {selected_aop}.", ephemeral=True)
 
@@ -941,7 +943,7 @@ async def cancel_patrol(interaction: discord.Interaction):
                 "Patrol has been cancelled by administration.",
                 discord.Color.red()
             )
-            await announcement_message.edit(embed=cancel_embed)
+            announcement_message = await announcement_message.edit(embed=cancel_embed)
         else:
             announce = styled_embed(
                 "❌ Tonight's Patrol Has Been Cancelled",
@@ -1030,13 +1032,13 @@ async def open_aop_vote(interaction: discord.Interaction):
 
 @tree.command(name="override_patrol_time")
 @discord.app_commands.autocomplete(time=time_autocomplete)
-async def override_patrol_time(interaction: discord.Interaction, time:str):
+async def override_patrol_time(interaction: discord.Interaction, time: str):
 
     if not admin_check(interaction):
         await interaction.response.send_message("No permission.", ephemeral=True)
         return
 
-    global confirmed_start_time
+    global confirmed_start_time, announcement_message
     confirmed_start_time = time
 
     embed = styled_embed(
@@ -1055,7 +1057,7 @@ async def override_patrol_time(interaction: discord.Interaction, time:str):
             for line in desc.split("\n")
         )
         new_embed = styled_embed("🚓 Tonight's Patrol is Confirmed!", desc, discord.Color.green())
-        await announcement_message.edit(embed=new_embed)
+        announcement_message = await announcement_message.edit(embed=new_embed)
 
     save_session()
     await interaction.response.send_message("Override sent.", ephemeral=True)
@@ -1068,6 +1070,8 @@ async def override_aop(interaction: discord.Interaction, area: str):
     if not admin_check(interaction):
         await interaction.response.send_message("No permission.", ephemeral=True)
         return
+
+    global announcement_message
 
     embed = styled_embed(
         "⚠️ AOP Override",
@@ -1094,7 +1098,7 @@ async def override_aop(interaction: discord.Interaction, area: str):
                     new_lines.insert(i + 1, f"📍 **AOP:** {area}")
                     break
         new_embed = styled_embed("🚓 Tonight's Patrol is Confirmed!", "\n".join(new_lines), discord.Color.green())
-        await announcement_message.edit(embed=new_embed)
+        announcement_message = await announcement_message.edit(embed=new_embed)
 
     await interaction.response.send_message("AOP override sent.", ephemeral=True)
 
@@ -1185,6 +1189,8 @@ async def check_inactive(interaction: discord.Interaction):
         await interaction.response.send_message("No permission.", ephemeral=True)
         return
 
+    await interaction.response.defer(ephemeral=True)
+
     now = datetime.datetime.now(TIMEZONE)
     two_weeks_ago = (now.date() - datetime.timedelta(days=14)).strftime("%Y-%m-%d")
 
@@ -1195,13 +1201,13 @@ async def check_inactive(interaction: discord.Interaction):
     ping_role = guild.get_role(PING_ROLE_ID)
 
     if not ping_role:
-        await interaction.response.send_message("Ping role not found.", ephemeral=True)
+        await interaction.followup.send("Ping role not found.", ephemeral=True)
         return
 
     inactive = [m for m in ping_role.members if not m.bot and m.id not in active_users]
 
     if not inactive:
-        await interaction.response.send_message("No inactive members in the last 2 weeks.", ephemeral=True)
+        await interaction.followup.send("No inactive members in the last 2 weeks.", ephemeral=True)
         return
 
     lines = []
@@ -1209,7 +1215,6 @@ async def check_inactive(interaction: discord.Interaction):
         reason = get_inactive_reason(m.id)
         lines.append(f"**{i}. {m.display_name}** (<@{m.id}>) — {reason}")
 
-    await interaction.response.defer()
     await send_paginated(interaction.channel, f"⚠️ Inactive Members ({len(inactive)} total)", lines, discord.Color.red())
     await interaction.followup.send(f"Found **{len(inactive)}** inactive members.", ephemeral=True)
 
@@ -1398,58 +1403,83 @@ async def aop_breakdown(interaction: discord.Interaction, period: Period = Perio
         await interaction.response.send_message("No AOP data for this period.", ephemeral=True)
         return
 
-    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    lc_set = set(mapLC)
+    ls_set = set(mapLS)
 
-    # Overall popularity
-    aop_counts = {}
-    for area, _ in aop_rows:
-        aop_counts[area] = aop_counts.get(area, 0) + 1
+    lc_rows = [(a, d) for a, d in aop_rows if a in lc_set]
+    ls_rows = [(a, d) for a, d in aop_rows if a in ls_set]
 
-    total = len(aop_rows)
-    sorted_aops = sorted(aop_counts.items(), key=lambda x: x[1], reverse=True)
-    top_count = sorted_aops[0][1] if sorted_aops else 1
+    embeds = []
 
-    aop_lines = []
-    for i, (area, count) in enumerate(sorted_aops):
-        pct = count / total * 100
-        bar = make_bar(count, top_count)
-        medal = ["🥇", "🥈", "🥉"][i] if i < 3 else "📌"
-        aop_lines.append(f"{medal} **{area}**\n{bar} `{count}` times ({pct:.0f}%)")
-
-    # Most popular AOP per day of week
-    day_aop_data = {}
-    for area, day_str in aop_rows:
-        if not day_str:
+    for map_name, map_rows, map_areas in [
+        ("Liberty County", lc_rows, mapLC),
+        ("Lander State", ls_rows, mapLS),
+    ]:
+        if not map_rows:
             continue
-        dt = datetime.datetime.strptime(day_str, "%Y-%m-%d")
-        dow = day_names[dt.weekday()]
-        if dow not in day_aop_data:
-            day_aop_data[dow] = {}
-        day_aop_data[dow][area] = day_aop_data[dow].get(area, 0) + 1
 
-    aop_day_lines = []
-    for day in day_names:
-        if day not in day_aop_data:
-            continue
-        areas = day_aop_data[day]
-        top_area = max(areas, key=areas.get)
-        aop_day_lines.append(f"📅 **{day}** → **{top_area}** (`{areas[top_area]}` times)")
+        day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
-    embed = styled_embed(f"🗺️ AOP Breakdown", f"**Period:** {period_label(period)}", discord.Color.purple())
+        aop_counts = {}
+        for area, _ in map_rows:
+            aop_counts[area] = aop_counts.get(area, 0) + 1
 
-    embed.add_field(
-        name="🏆 Overall Popularity",
-        value="\n\n".join(aop_lines),
-        inline=False
-    )
+        total = len(map_rows)
+        sorted_aops = sorted(aop_counts.items(), key=lambda x: x[1], reverse=True)
+        top_count = sorted_aops[0][1] if sorted_aops else 1
 
-    embed.add_field(
-        name="📅 Most Popular AOP per Day",
-        value="\n".join(aop_day_lines) if aop_day_lines else "No data",
-        inline=False
-    )
+        aop_lines = []
+        for i, (area, count) in enumerate(sorted_aops):
+            pct = count / total * 100
+            bar = make_bar(count, top_count)
+            medal = ["🥇", "🥈", "🥉"][i] if i < 3 else "📌"
+            aop_lines.append(f"{medal} **{area}**\n{bar} `{count}` times ({pct:.0f}%)")
 
-    await interaction.response.send_message(embed=embed)
+        # Unused areas
+        unused = [a for a in map_areas if a not in aop_counts]
+
+        day_aop_data = {}
+        for area, day_str in map_rows:
+            if not day_str:
+                continue
+            dt = datetime.datetime.strptime(day_str, "%Y-%m-%d")
+            dow = day_names[dt.weekday()]
+            if dow not in day_aop_data:
+                day_aop_data[dow] = {}
+            day_aop_data[dow][area] = day_aop_data[dow].get(area, 0) + 1
+
+        aop_day_lines = []
+        for day in day_names:
+            if day not in day_aop_data:
+                continue
+            areas = day_aop_data[day]
+            top_area = max(areas, key=areas.get)
+            aop_day_lines.append(f"📅 **{day}** → **{top_area}** (`{areas[top_area]}` times)")
+
+        embed = styled_embed(f"🗺️ AOP Breakdown — {map_name}", f"**Period:** {period_label(period)}\n**Total Patrols:** `{total}`", discord.Color.purple())
+
+        embed.add_field(
+            name="🏆 Area Popularity",
+            value="\n\n".join(aop_lines),
+            inline=False
+        )
+
+        if unused:
+            embed.add_field(
+                name="🚫 Never Selected",
+                value=", ".join(unused),
+                inline=False
+            )
+
+        embed.add_field(
+            name="📅 Most Popular AOP per Day",
+            value="\n".join(aop_day_lines) if aop_day_lines else "No data",
+            inline=False
+        )
+
+        embeds.append(embed)
+
+    await interaction.response.send_message(embeds=embeds)
 
 
 @tree.command(name="maplc")
