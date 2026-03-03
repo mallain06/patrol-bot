@@ -5,8 +5,14 @@ import datetime
 import pytz
 import random
 import sqlite3
+import enum
 
 TOKEN = os.getenv("TOKEN")
+
+
+class Period(enum.Enum):
+    all_time = "All Time"
+    last_2_weeks = "Last 2 Weeks"
 
 GUILD_ID = int(os.getenv("GUILD_ID", 0))
 PATROL_CHANNEL_ID = int(os.getenv("PATROL_CHANNEL_ID", 0))
@@ -78,6 +84,14 @@ value TEXT
 )
 """)
 
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS activity_log(
+user_id INTEGER,
+action TEXT,
+day TEXT
+)
+""")
+
 conn.commit()
 
 
@@ -89,6 +103,12 @@ def ensure_member(user_id):
 def record_stat(user_id, column):
     ensure_member(user_id)
     cursor.execute(f"UPDATE members SET {column} = {column} + 1 WHERE user_id = ?", (user_id,))
+    conn.commit()
+
+
+def log_activity(user_id, action):
+    today = datetime.datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+    cursor.execute("INSERT INTO activity_log(user_id, action, day) VALUES(?, ?, ?)", (user_id, action, today))
     conn.commit()
 
 
@@ -221,6 +241,7 @@ class PatrolButton(discord.ui.Button):
         cant_make_votes.discard(interaction.user.id)
         patrol_votes[interaction.user.id] = self.time
         record_stat(interaction.user.id, "patrol_votes")
+        log_activity(interaction.user.id, "patrol_vote")
 
         await interaction.response.send_message(f"You voted for **{self.time}**.", ephemeral=True)
         await update_patrol_message()
@@ -241,6 +262,7 @@ class CantMakeButton(discord.ui.Button):
         patrol_votes.pop(interaction.user.id, None)
         cant_make_votes.add(interaction.user.id)
         record_stat(interaction.user.id, "cant_make")
+        log_activity(interaction.user.id, "cant_make")
 
         await interaction.response.send_message("You marked **Can't Make It**.", ephemeral=True)
         await update_patrol_message()
@@ -273,6 +295,7 @@ class AOPButton(discord.ui.Button):
 
         aop_votes[interaction.user.id] = self.option
         record_stat(interaction.user.id, "aop_votes")
+        log_activity(interaction.user.id, "aop_vote")
 
         await interaction.response.send_message(f"You voted for **{self.option}**.", ephemeral=True)
         await update_aop_message()
@@ -289,6 +312,7 @@ async def on_ready():
     close_votes.start()
     briefing_reminder.start()
     stats_checker.start()
+    inactivity_checker.start()
 
     tree.copy_global_to(guild=discord.Object(id=GUILD_ID))
     await tree.sync(guild=discord.Object(id=GUILD_ID))
@@ -453,6 +477,103 @@ def admin_check(interaction):
 
 # ---------------- ADMIN COMMANDS ----------------
 
+@tree.command(name="close_patrol_votes")
+async def close_patrol_votes(interaction: discord.Interaction):
+
+    if not admin_check(interaction):
+        await interaction.response.send_message("No permission.", ephemeral=True)
+        return
+
+    patrol_channel = bot.get_channel(PATROL_CHANNEL_ID)
+    now = datetime.datetime.now(TIMEZONE)
+
+    attendance_counts = {time: 0 for time in time_slots}
+    for vote in patrol_votes.values():
+        attendance_counts[vote] += 1
+
+    cumulative = 0
+    start_time = None
+
+    for time in time_slots:
+        cumulative += attendance_counts[time]
+        if cumulative >= MINIMUM_PATROL:
+            start_time = time
+            break
+
+    if not start_time:
+        today = now.strftime("%Y-%m-%d")
+        cursor.execute("INSERT INTO patrol_days(day, attendance, cancelled, cant_make) VALUES(?, ?, 1, ?)", (today, len(patrol_votes), len(cant_make_votes)))
+        conn.commit()
+
+        embed = discord.Embed(
+            title="❌ Patrol Cancelled",
+            description="Minimum attendance not reached.",
+            color=discord.Color.red()
+        )
+
+        await patrol_channel.send(embed=embed)
+        await interaction.response.send_message("Patrol votes closed — cancelled (not enough votes).", ephemeral=True)
+        return
+
+    today = now.strftime("%Y-%m-%d")
+    cursor.execute("INSERT INTO patrol_days(day, attendance, cancelled, cant_make) VALUES(?, ?, 0, ?)", (today, len(patrol_votes), len(cant_make_votes)))
+
+    for user_id in patrol_votes:
+        record_stat(user_id, "patrol_attended")
+
+    for user_id in cant_make_votes:
+        record_stat(user_id, "patrol_skipped")
+
+    conn.commit()
+
+    global confirmed_start_time
+    confirmed_start_time = start_time
+
+    embed = discord.Embed(
+        title="🚓 Patrol Confirmed",
+        color=discord.Color.green()
+    )
+
+    embed.add_field(name="Members Attending", value=str(len(patrol_votes)))
+    embed.add_field(name="Minimum Required", value=str(MINIMUM_PATROL))
+    embed.add_field(name="Start Time", value=start_time)
+
+    await patrol_channel.send(embed=embed)
+    await interaction.response.send_message(f"Patrol votes closed — confirmed at {start_time}.", ephemeral=True)
+
+
+@tree.command(name="close_aop_votes")
+async def close_aop_votes(interaction: discord.Interaction):
+
+    if not admin_check(interaction):
+        await interaction.response.send_message("No permission.", ephemeral=True)
+        return
+
+    now = datetime.datetime.now(TIMEZONE)
+    today = now.strftime("%Y-%m-%d")
+
+    if not aop_votes:
+        options = mapLC if current_map == "LC" else mapLS
+        selected_aop = random.choice(options)
+    else:
+        counts = {}
+        for vote in aop_votes.values():
+            counts[vote] = counts.get(vote, 0) + 1
+        selected_aop = max(counts, key=counts.get)
+
+    cursor.execute("INSERT INTO aop_stats(area, day) VALUES(?, ?)", (selected_aop, today))
+    conn.commit()
+
+    embed = discord.Embed(
+        title="🗺️ AOP Result",
+        description=f"Tonight's AOP: **{selected_aop}**\nTotal votes: **{len(aop_votes)}**",
+        color=discord.Color.purple()
+    )
+
+    await bot.get_channel(AOP_CHANNEL_ID).send(embed=embed)
+    await interaction.response.send_message(f"AOP votes closed — {selected_aop}.", ephemeral=True)
+
+
 @tree.command(name="cancel_patrol")
 async def cancel_patrol(interaction: discord.Interaction):
 
@@ -555,21 +676,36 @@ async def user_stats(interaction: discord.Interaction, member: discord.Member):
     await interaction.response.send_message(embed=embed)
 
 
+def get_cutoff(period: Period):
+    if period == Period.last_2_weeks:
+        return (datetime.datetime.now(TIMEZONE).date() - datetime.timedelta(days=14)).strftime("%Y-%m-%d")
+    return None
+
+
+def period_label(period: Period):
+    return period.value
+
+
 @tree.command(name="server_stats")
-async def server_stats(interaction: discord.Interaction):
+async def server_stats(interaction: discord.Interaction, period: Period = Period.all_time):
 
     if not admin_check(interaction):
         await interaction.response.send_message("No permission.", ephemeral=True)
         return
 
-    cursor.execute("SELECT day, attendance, cancelled, cant_make FROM patrol_days")
+    cutoff = get_cutoff(period)
+
+    if cutoff:
+        cursor.execute("SELECT day, attendance, cancelled, cant_make FROM patrol_days WHERE day >= ?", (cutoff,))
+    else:
+        cursor.execute("SELECT day, attendance, cancelled, cant_make FROM patrol_days")
     patrol_rows = cursor.fetchall()
 
     cursor.execute("SELECT COUNT(*) FROM members")
     total_members = cursor.fetchone()[0]
 
     if not patrol_rows:
-        await interaction.response.send_message("No patrol data yet.", ephemeral=True)
+        await interaction.response.send_message("No patrol data for this period.", ephemeral=True)
         return
 
     day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -598,7 +734,7 @@ async def server_stats(interaction: discord.Interaction):
     lowest = min(all_attendance)
 
     embed = discord.Embed(
-        title="📈 Server Statistics",
+        title=f"📈 Server Statistics ({period_label(period)})",
         color=discord.Color.teal()
     )
 
@@ -631,17 +767,22 @@ async def server_stats(interaction: discord.Interaction):
 
 
 @tree.command(name="activity_stats")
-async def activity_stats(interaction: discord.Interaction):
+async def activity_stats(interaction: discord.Interaction, period: Period = Period.all_time):
 
     if not admin_check(interaction):
         await interaction.response.send_message("No permission.", ephemeral=True)
         return
 
-    cursor.execute("SELECT day, attendance, cancelled, cant_make FROM patrol_days")
+    cutoff = get_cutoff(period)
+
+    if cutoff:
+        cursor.execute("SELECT day, attendance, cancelled, cant_make FROM patrol_days WHERE day >= ?", (cutoff,))
+    else:
+        cursor.execute("SELECT day, attendance, cancelled, cant_make FROM patrol_days")
     patrol_rows = cursor.fetchall()
 
     if not patrol_rows:
-        await interaction.response.send_message("No patrol data yet.", ephemeral=True)
+        await interaction.response.send_message("No patrol data for this period.", ephemeral=True)
         return
 
     day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -670,7 +811,7 @@ async def activity_stats(interaction: discord.Interaction):
     noshow_pct = (total_cant_make / total_responses * 100) if total_responses > 0 else 0
 
     embed = discord.Embed(
-        title="📉 Activity & No-Show Stats",
+        title=f"📉 Activity & No-Show Stats ({period_label(period)})",
         color=discord.Color.orange()
     )
 
@@ -702,17 +843,22 @@ async def activity_stats(interaction: discord.Interaction):
 
 
 @tree.command(name="aop_breakdown")
-async def aop_breakdown(interaction: discord.Interaction):
+async def aop_breakdown(interaction: discord.Interaction, period: Period = Period.all_time):
 
     if not admin_check(interaction):
         await interaction.response.send_message("No permission.", ephemeral=True)
         return
 
-    cursor.execute("SELECT area, day FROM aop_stats")
+    cutoff = get_cutoff(period)
+
+    if cutoff:
+        cursor.execute("SELECT area, day FROM aop_stats WHERE day >= ?", (cutoff,))
+    else:
+        cursor.execute("SELECT area, day FROM aop_stats")
     aop_rows = cursor.fetchall()
 
     if not aop_rows:
-        await interaction.response.send_message("No AOP data yet.", ephemeral=True)
+        await interaction.response.send_message("No AOP data for this period.", ephemeral=True)
         return
 
     day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -744,7 +890,7 @@ async def aop_breakdown(interaction: discord.Interaction):
         aop_day_lines.append(f"**{area}** — most popular on **{top_day}** ({days[top_day]} times)")
 
     embed = discord.Embed(
-        title="🗺️ AOP Breakdown",
+        title=f"🗺️ AOP Breakdown ({period_label(period)})",
         color=discord.Color.purple()
     )
 
@@ -789,6 +935,41 @@ async def map_ls(interaction: discord.Interaction):
     await interaction.response.send_message("Map switched to LS.")
 
 
+# ---------------- PAGINATION ----------------
+
+def paginate_lines(lines, max_length=4000):
+    pages = []
+    current = []
+    length = 0
+
+    for line in lines:
+        line_len = len(line) + 2
+        if length + line_len > max_length and current:
+            pages.append("\n\n".join(current))
+            current = []
+            length = 0
+        current.append(line)
+        length += line_len
+
+    if current:
+        pages.append("\n\n".join(current))
+
+    return pages
+
+
+async def send_paginated(channel, title, lines, color):
+    pages = paginate_lines(lines)
+
+    for i, page in enumerate(pages):
+        suffix = f" (Page {i + 1}/{len(pages)})" if len(pages) > 1 else ""
+        embed = discord.Embed(
+            title=f"{title}{suffix}",
+            description=page,
+            color=color
+        )
+        await channel.send(embed=embed)
+
+
 # ---------------- STATS LEADERBOARD ----------------
 
 async def post_stats_leaderboard():
@@ -801,11 +982,6 @@ async def post_stats_leaderboard():
 
     guild = bot.get_guild(GUILD_ID)
     channel = bot.get_channel(STATS_CHANNEL_ID)
-
-    embed = discord.Embed(
-        title="📊 Biweekly Stats Leaderboard",
-        color=discord.Color.blue()
-    )
 
     lines = []
 
@@ -821,13 +997,11 @@ async def post_stats_leaderboard():
             f"Patrol Skipped: {p_skip} | AOP Skipped: {a_skip}"
         )
 
-    embed.description = "\n\n".join(lines)
-
     today = datetime.datetime.now(TIMEZONE).strftime("%Y-%m-%d")
     cursor.execute("INSERT OR REPLACE INTO settings(key, value) VALUES('last_stats_post', ?)", (today,))
     conn.commit()
 
-    await channel.send(embed=embed)
+    await send_paginated(channel, "📊 Biweekly Stats Leaderboard", lines, discord.Color.blue())
 
 
 @tasks.loop(minutes=1)
@@ -847,6 +1021,51 @@ async def stats_checker():
             return
 
     await post_stats_leaderboard()
+
+
+# ---------------- INACTIVITY CHECKER ----------------
+
+@tasks.loop(minutes=1)
+async def inactivity_checker():
+
+    now = datetime.datetime.now(TIMEZONE)
+
+    if now.hour != 12 or now.minute != 0:
+        return
+
+    cursor.execute("SELECT value FROM settings WHERE key = 'last_inactivity_post'")
+    row = cursor.fetchone()
+
+    if row:
+        last_date = datetime.datetime.strptime(row[0], "%Y-%m-%d").date()
+        if (now.date() - last_date).days < 14:
+            return
+
+    two_weeks_ago = (now.date() - datetime.timedelta(days=14)).strftime("%Y-%m-%d")
+
+    cursor.execute("SELECT DISTINCT user_id FROM activity_log WHERE day >= ?", (two_weeks_ago,))
+    active_users = {r[0] for r in cursor.fetchall()}
+
+    guild = bot.get_guild(GUILD_ID)
+    ping_role = guild.get_role(PING_ROLE_ID)
+
+    if not ping_role:
+        return
+
+    inactive = [m for m in ping_role.members if not m.bot and m.id not in active_users]
+
+    if not inactive:
+        return
+
+    lines = [f"**{i}. {m.display_name}** (<@{m.id}>)" for i, m in enumerate(inactive, 1)]
+
+    channel = bot.get_channel(STATS_CHANNEL_ID)
+
+    today = now.strftime("%Y-%m-%d")
+    cursor.execute("INSERT OR REPLACE INTO settings(key, value) VALUES('last_inactivity_post', ?)", (today,))
+    conn.commit()
+
+    await send_paginated(channel, "⚠️ Inactive Members (Last 2 Weeks)", lines, discord.Color.red())
 
 
 # ---------------- TEST COMMANDS ----------------
@@ -1011,6 +1230,113 @@ async def test_override_aop(interaction: discord.Interaction, area: str):
 
     await bot.get_channel(AOP_CHANNEL_ID).send(embed=embed)
     await interaction.response.send_message("Test AOP override posted.", ephemeral=True)
+
+
+@tree.command(name="test_fake_data")
+async def test_fake_data(interaction: discord.Interaction, days: int = 30):
+
+    if not admin_check(interaction):
+        await interaction.response.send_message("No permission.", ephemeral=True)
+        return
+
+    guild = bot.get_guild(GUILD_ID)
+    members = [m for m in guild.members if not m.bot]
+
+    if not members:
+        await interaction.response.send_message("No non-bot members found.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    options = mapLC + mapLS
+    today = datetime.datetime.now(TIMEZONE).date()
+    patrols_added = 0
+
+    for i in range(days):
+        day = today - datetime.timedelta(days=i + 1)
+        day_str = day.strftime("%Y-%m-%d")
+
+        attending = random.sample(members, k=random.randint(2, min(len(members), 8)))
+        not_coming = random.sample([m for m in members if m not in attending], k=min(random.randint(0, 3), len(members) - len(attending)))
+
+        cancelled = 1 if len(attending) < MINIMUM_PATROL else 0
+
+        cursor.execute(
+            "INSERT INTO patrol_days(day, attendance, cancelled, cant_make) VALUES(?, ?, ?, ?)",
+            (day_str, len(attending), cancelled, len(not_coming))
+        )
+
+        if not cancelled:
+            area = random.choice(options)
+            cursor.execute("INSERT INTO aop_stats(area, day) VALUES(?, ?)", (area, day_str))
+
+        for m in attending:
+            ensure_member(m.id)
+            cursor.execute("UPDATE members SET patrol_votes = patrol_votes + 1, patrol_attended = patrol_attended + 1 WHERE user_id = ?", (m.id,))
+
+        for m in not_coming:
+            ensure_member(m.id)
+            cursor.execute("UPDATE members SET cant_make = cant_make + 1, patrol_skipped = patrol_skipped + 1 WHERE user_id = ?", (m.id,))
+
+        for m in random.sample(members, k=random.randint(1, min(len(members), 6))):
+            ensure_member(m.id)
+            cursor.execute("UPDATE members SET aop_votes = aop_votes + 1 WHERE user_id = ?", (m.id,))
+
+        patrols_added += 1
+
+    conn.commit()
+
+    await interaction.followup.send(f"Added **{patrols_added}** fake patrol days.", ephemeral=True)
+
+
+@tree.command(name="test_clear_data")
+async def test_clear_data(interaction: discord.Interaction):
+
+    if not admin_check(interaction):
+        await interaction.response.send_message("No permission.", ephemeral=True)
+        return
+
+    cursor.execute("DELETE FROM patrol_days")
+    cursor.execute("DELETE FROM aop_stats")
+    cursor.execute("DELETE FROM members")
+    cursor.execute("DELETE FROM settings")
+    cursor.execute("DELETE FROM activity_log")
+    conn.commit()
+
+    await interaction.response.send_message("All data cleared.", ephemeral=True)
+
+
+@tree.command(name="test_inactivity")
+async def test_inactivity(interaction: discord.Interaction):
+
+    if not admin_check(interaction):
+        await interaction.response.send_message("No permission.", ephemeral=True)
+        return
+
+    now = datetime.datetime.now(TIMEZONE)
+    two_weeks_ago = (now.date() - datetime.timedelta(days=14)).strftime("%Y-%m-%d")
+
+    cursor.execute("SELECT DISTINCT user_id FROM activity_log WHERE day >= ?", (two_weeks_ago,))
+    active_users = {r[0] for r in cursor.fetchall()}
+
+    guild = bot.get_guild(GUILD_ID)
+    ping_role = guild.get_role(PING_ROLE_ID)
+
+    if not ping_role:
+        await interaction.response.send_message("Ping role not found.", ephemeral=True)
+        return
+
+    inactive = [m for m in ping_role.members if not m.bot and m.id not in active_users]
+
+    if not inactive:
+        await interaction.response.send_message("No inactive members.", ephemeral=True)
+        return
+
+    lines = [f"**{i}. {m.display_name}** (<@{m.id}>)" for i, m in enumerate(inactive, 1)]
+
+    await interaction.response.defer(ephemeral=True)
+    await send_paginated(interaction.channel, "⚠️ Inactive Members (TEST)", lines, discord.Color.red())
+    await interaction.followup.send(f"Found {len(inactive)} inactive members.", ephemeral=True)
 
 
 bot.run(TOKEN)
