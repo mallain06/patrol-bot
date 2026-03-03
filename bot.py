@@ -5,6 +5,7 @@ import datetime
 import pytz
 import random
 import sqlite3
+import json
 import enum
 
 TOKEN = os.getenv("TOKEN")
@@ -93,6 +94,13 @@ day TEXT
 )
 """)
 
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS session_state(
+key TEXT PRIMARY KEY,
+value TEXT
+)
+""")
+
 conn.commit()
 
 
@@ -111,6 +119,87 @@ def log_activity(user_id, action):
     today = datetime.datetime.now(TIMEZONE).strftime("%Y-%m-%d")
     cursor.execute("INSERT INTO activity_log(user_id, action, day) VALUES(?, ?, ?)", (user_id, action, today))
     conn.commit()
+
+
+def save_session():
+    state = {
+        "patrol_votes": {str(k): v for k, v in patrol_votes.items()},
+        "cant_make_votes": [int(uid) for uid in cant_make_votes],
+        "aop_votes": {str(k): v for k, v in aop_votes.items()},
+        "confirmed_start_time": confirmed_start_time,
+        "voting_open": voting_open,
+        "current_map": current_map,
+        "patrol_message_id": patrol_message.id if patrol_message else None,
+        "patrol_channel_id": patrol_message.channel.id if patrol_message else None,
+        "aop_message_id": aop_message.id if aop_message else None,
+        "aop_channel_id": aop_message.channel.id if aop_message else None,
+        "announcement_message_id": announcement_message.id if announcement_message else None,
+        "announcement_channel_id": announcement_message.channel.id if announcement_message else None,
+    }
+    cursor.execute(
+        "INSERT OR REPLACE INTO session_state(key, value) VALUES('state', ?)",
+        (json.dumps(state),)
+    )
+    conn.commit()
+
+
+async def load_session():
+    global patrol_votes, cant_make_votes, aop_votes, confirmed_start_time
+    global voting_open, current_map, patrol_message, aop_message, announcement_message
+
+    cursor.execute("SELECT value FROM session_state WHERE key = 'state'")
+    row = cursor.fetchone()
+    if not row:
+        return
+
+    state = json.loads(row[0])
+
+    patrol_votes.clear()
+    patrol_votes.update({int(k): v for k, v in state.get("patrol_votes", {}).items()})
+    cant_make_votes.clear()
+    cant_make_votes.update(state.get("cant_make_votes", []))
+    aop_votes.clear()
+    aop_votes.update({int(k): v for k, v in state.get("aop_votes", {}).items()})
+    confirmed_start_time = state.get("confirmed_start_time")
+    voting_open = state.get("voting_open", False)
+    current_map = state.get("current_map", "LC")
+
+    # Restore message references
+    try:
+        pid = state.get("patrol_message_id")
+        pcid = state.get("patrol_channel_id")
+        if pid and pcid:
+            ch = bot.get_channel(pcid)
+            if ch:
+                patrol_message = await ch.fetch_message(pid)
+    except (discord.NotFound, discord.HTTPException):
+        patrol_message = None
+
+    try:
+        aid = state.get("aop_message_id")
+        acid = state.get("aop_channel_id")
+        if aid and acid:
+            ch = bot.get_channel(acid)
+            if ch:
+                aop_message = await ch.fetch_message(aid)
+    except (discord.NotFound, discord.HTTPException):
+        aop_message = None
+
+    try:
+        anid = state.get("announcement_message_id")
+        ancid = state.get("announcement_channel_id")
+        if anid and ancid:
+            ch = bot.get_channel(ancid)
+            if ch:
+                announcement_message = await ch.fetch_message(anid)
+    except (discord.NotFound, discord.HTTPException):
+        announcement_message = None
+
+    # Re-register persistent views so buttons work after restart
+    if patrol_message:
+        bot.add_view(PatrolView(), message_id=patrol_message.id)
+    if aop_message:
+        bot.add_view(AOPView(), message_id=aop_message.id)
 
 
 def get_inactive_reason(user_id):
@@ -157,6 +246,7 @@ aop_message = None
 patrol_embed_title = "🚓 Patrol Attendance"
 aop_embed_title = "🗺️ AOP Voting"
 voting_open = False
+announcement_message = None
 
 current_map = "LC"
 
@@ -192,6 +282,31 @@ def styled_embed(title, description=None, color=discord.Color.blue()):
     embed.timestamp = datetime.datetime.now(TIMEZONE)
     embed.set_footer(text="Patrol Bot")
     return embed
+
+
+# ---------------- AUTOCOMPLETES ----------------
+
+async def time_autocomplete(interaction: discord.Interaction, current: str):
+    return [
+        discord.app_commands.Choice(name=t, value=t)
+        for t in time_slots if current.lower() in t.lower()
+    ]
+
+
+async def area_autocomplete(interaction: discord.Interaction, current: str):
+    options = mapLC + mapLS
+    return [
+        discord.app_commands.Choice(name=a, value=a)
+        for a in options if current.lower() in a.lower()
+    ][:25]
+
+
+async def current_map_area_autocomplete(interaction: discord.Interaction, current: str):
+    options = mapLC if current_map == "LC" else mapLS
+    return [
+        discord.app_commands.Choice(name=a, value=a)
+        for a in options if current.lower() in a.lower()
+    ]
 
 
 # ---------------- LIVE STATS ----------------
@@ -280,6 +395,8 @@ async def lock_voting():
             item.disabled = True
         await aop_message.edit(view=view)
 
+    save_session()
+
 
 # ---------------- VIEWS ----------------
 
@@ -311,10 +428,13 @@ class PatrolButton(discord.ui.Button):
             await interaction.response.send_message("Voting is closed.", ephemeral=True)
             return
 
+        is_new = interaction.user.id not in patrol_votes and interaction.user.id not in cant_make_votes
         cant_make_votes.discard(interaction.user.id)
         patrol_votes[interaction.user.id] = self.time
-        record_stat(interaction.user.id, "patrol_votes")
-        log_activity(interaction.user.id, "patrol_vote")
+        if is_new:
+            record_stat(interaction.user.id, "patrol_votes")
+            log_activity(interaction.user.id, "patrol_vote")
+        save_session()
 
         await interaction.response.send_message(f"You voted for **{self.time}**.", ephemeral=True)
         await update_patrol_message()
@@ -336,10 +456,13 @@ class CantMakeButton(discord.ui.Button):
             await interaction.response.send_message("Voting is closed.", ephemeral=True)
             return
 
+        is_new = interaction.user.id not in cant_make_votes and interaction.user.id not in patrol_votes
         patrol_votes.pop(interaction.user.id, None)
         cant_make_votes.add(interaction.user.id)
-        record_stat(interaction.user.id, "cant_make")
-        log_activity(interaction.user.id, "cant_make")
+        if is_new:
+            record_stat(interaction.user.id, "cant_make")
+            log_activity(interaction.user.id, "cant_make")
+        save_session()
 
         await interaction.response.send_message("You marked **Can't Make It**.", ephemeral=True)
         await update_patrol_message()
@@ -374,9 +497,12 @@ class AOPButton(discord.ui.Button):
             await interaction.response.send_message("Voting is closed.", ephemeral=True)
             return
 
+        is_new = interaction.user.id not in aop_votes
         aop_votes[interaction.user.id] = self.option
-        record_stat(interaction.user.id, "aop_votes")
-        log_activity(interaction.user.id, "aop_vote")
+        if is_new:
+            record_stat(interaction.user.id, "aop_votes")
+            log_activity(interaction.user.id, "aop_vote")
+        save_session()
 
         await interaction.response.send_message(f"You voted for **{self.option}**.", ephemeral=True)
         await update_aop_message()
@@ -388,6 +514,9 @@ class AOPButton(discord.ui.Button):
 async def on_ready():
 
     print("Bot Online")
+
+    await load_session()
+    print(f"Session restored: voting_open={voting_open}, patrol_votes={len(patrol_votes)}, aop_votes={len(aop_votes)}")
 
     scheduler.start()
     close_votes.start()
@@ -424,6 +553,7 @@ async def scheduler():
 
         patrol_message = await patrol_channel.send(role, embed=build_patrol_embed(patrol_embed_title), view=PatrolView())
         aop_message = await aop_channel.send(embed=build_aop_embed(aop_embed_title), view=AOPView())
+        save_session()
 
 
 # ---------------- CLOSE VOTES ----------------
@@ -518,15 +648,12 @@ async def close_votes():
 
         embed = styled_embed("✅ Patrol Confirmed", color=discord.Color.green())
         embed.add_field(name="🕐 Start Time", value=f"```{start_time}```", inline=True)
-        embed.add_field(name="📍 AOP", value=f"```{selected_aop}```", inline=True)
-        embed.add_field(name="\u200b", value="\u200b", inline=True)
         embed.add_field(name="👥 Attending", value=f"```{len(patrol_votes)}```", inline=True)
-        embed.add_field(name="📊 Minimum", value=f"```{MINIMUM_PATROL}```", inline=True)
-        embed.add_field(name="❌ Can't Make It", value=f"```{len(cant_make_votes)}```", inline=True)
 
         await patrol_channel.send(embed=embed)
 
         if announcement_channel:
+            global announcement_message
             announce = styled_embed(
                 "🚓 Tonight's Patrol is Confirmed!",
                 f"Patrol is happening tonight! Here are the details:\n\n"
@@ -538,7 +665,9 @@ async def close_votes():
                 discord.Color.green()
             )
             role = f"<@&{PING_ROLE_ID}>"
-            await announcement_channel.send(role, embed=announce)
+            announcement_message = await announcement_channel.send(role, embed=announce)
+
+        save_session()
 
 
 # ---------------- BRIEFING REMINDER ----------------
@@ -577,6 +706,7 @@ async def briefing_reminder():
 
         await channel.send(role, embed=embed)
         confirmed_start_time = None
+        save_session()
 
 
 # ---------------- ADMIN CHECK ----------------
@@ -664,11 +794,11 @@ async def close_patrol_votes(interaction: discord.Interaction):
     embed = styled_embed("✅ Patrol Confirmed", color=discord.Color.green())
     embed.add_field(name="🕐 Start Time", value=f"```{start_time}```", inline=True)
     embed.add_field(name="👥 Attending", value=f"```{len(patrol_votes)}```", inline=True)
-    embed.add_field(name="📊 Minimum", value=f"```{MINIMUM_PATROL}```", inline=True)
 
     await patrol_channel.send(embed=embed)
 
     if announcement_channel:
+        global announcement_message
         announce = styled_embed(
             "🚓 Tonight's Patrol is Confirmed!",
             f"Patrol is happening tonight! Here are the details:\n\n"
@@ -679,8 +809,9 @@ async def close_patrol_votes(interaction: discord.Interaction):
             discord.Color.green()
         )
         role = f"<@&{PING_ROLE_ID}>"
-        await announcement_channel.send(role, embed=announce)
+        announcement_message = await announcement_channel.send(role, embed=announce)
 
+    save_session()
     await interaction.response.send_message(f"Patrol votes closed — confirmed at {start_time}.", ephemeral=True)
 
 
@@ -714,10 +845,30 @@ async def close_aop_votes(interaction: discord.Interaction):
     )
 
     await bot.get_channel(AOP_CHANNEL_ID).send(embed=embed)
+
+    if announcement_message:
+        old_embed = announcement_message.embeds[0]
+        desc = old_embed.description or ""
+        lines = desc.split("\n")
+        new_lines = []
+        for line in lines:
+            if line.startswith("📍"):
+                new_lines.append(f"📍 **AOP:** {selected_aop}")
+            else:
+                new_lines.append(line)
+        if not any(l.startswith("📍") for l in lines):
+            for i, line in enumerate(new_lines):
+                if line.startswith("🕐"):
+                    new_lines.insert(i + 1, f"📍 **AOP:** {selected_aop}")
+                    break
+        new_embed = styled_embed("🚓 Tonight's Patrol is Confirmed!", "\n".join(new_lines), discord.Color.green())
+        await announcement_message.edit(embed=new_embed)
+
     await interaction.response.send_message(f"AOP votes closed — {selected_aop}.", ephemeral=True)
 
 
 @tree.command(name="start_patrol")
+@discord.app_commands.autocomplete(time=time_autocomplete, area=area_autocomplete)
 async def start_patrol(interaction: discord.Interaction, time: str, area: str):
 
     if not admin_check(interaction):
@@ -734,7 +885,6 @@ async def start_patrol(interaction: discord.Interaction, time: str, area: str):
 
     embed = styled_embed("✅ Patrol Confirmed", "⚡ Forced start by administration.", discord.Color.green())
     embed.add_field(name="🕐 Start Time", value=f"```{time}```", inline=True)
-    embed.add_field(name="📍 AOP", value=f"```{area}```", inline=True)
     embed.add_field(name="👥 Attending", value=f"```{len(patrol_votes) if patrol_votes else 'N/A'}```", inline=True)
 
     now = datetime.datetime.now(TIMEZONE)
@@ -746,6 +896,7 @@ async def start_patrol(interaction: discord.Interaction, time: str, area: str):
     await patrol_channel.send(embed=embed)
 
     if announcement_channel:
+        global announcement_message
         announce = styled_embed(
             "🚓 Tonight's Patrol is Confirmed!",
             f"Patrol is happening tonight! Here are the details:\n\n"
@@ -757,8 +908,9 @@ async def start_patrol(interaction: discord.Interaction, time: str, area: str):
             discord.Color.green()
         )
         role = f"<@&{PING_ROLE_ID}>"
-        await announcement_channel.send(role, embed=announce)
+        announcement_message = await announcement_channel.send(role, embed=announce)
 
+    save_session()
     await interaction.response.send_message(f"Patrol force started at {time}, AOP: {area}.", ephemeral=True)
 
 
@@ -769,22 +921,123 @@ async def cancel_patrol(interaction: discord.Interaction):
         await interaction.response.send_message("No permission.", ephemeral=True)
         return
 
+    global announcement_message
+
+    await lock_voting()
+
     embed = styled_embed(
         "❌ Patrol Cancelled",
         "Cancelled by administration.",
         discord.Color.red()
     )
 
-    await interaction.response.send_message("Patrol cancelled.", ephemeral=True)
     await bot.get_channel(PATROL_CHANNEL_ID).send(embed=embed)
+
+    announcement_channel = bot.get_channel(ANNOUNCEMENT_CHANNEL_ID)
+    if announcement_channel:
+        if announcement_message:
+            cancel_embed = styled_embed(
+                "❌ Tonight's Patrol Has Been Cancelled",
+                "Patrol has been cancelled by administration.",
+                discord.Color.red()
+            )
+            await announcement_message.edit(embed=cancel_embed)
+        else:
+            announce = styled_embed(
+                "❌ Tonight's Patrol Has Been Cancelled",
+                f"Patrol has been cancelled by administration.\n\n"
+                f"👥 **Signed Up:** `{len(patrol_votes)}` / `{MINIMUM_PATROL}` minimum\n"
+                f"❌ **Can't Make It:** `{len(cant_make_votes)}`\n\n"
+                f"Better luck next time!",
+                discord.Color.red()
+            )
+            role = f"<@&{PING_ROLE_ID}>"
+            await announcement_channel.send(role, embed=announce)
+
+    now = datetime.datetime.now(TIMEZONE)
+    today = now.strftime("%Y-%m-%d")
+    cursor.execute("INSERT INTO patrol_days(day, attendance, cancelled, cant_make) VALUES(?, ?, 1, ?)", (today, len(patrol_votes), len(cant_make_votes)))
+    conn.commit()
+
+    save_session()
+    await interaction.response.send_message("Patrol cancelled.", ephemeral=True)
+
+
+@tree.command(name="open_votes")
+async def open_votes(interaction: discord.Interaction):
+
+    if not admin_check(interaction):
+        await interaction.response.send_message("No permission.", ephemeral=True)
+        return
+
+    global patrol_message, aop_message, patrol_embed_title, aop_embed_title, voting_open
+    patrol_votes.clear()
+    cant_make_votes.clear()
+    aop_votes.clear()
+    voting_open = True
+    patrol_embed_title = "🚓 Patrol Attendance"
+    aop_embed_title = "🗺️ AOP Voting"
+
+    patrol_channel = bot.get_channel(PATROL_CHANNEL_ID)
+    aop_channel = bot.get_channel(AOP_CHANNEL_ID)
+    role = f"<@&{PING_ROLE_ID}>"
+
+    patrol_message = await patrol_channel.send(role, embed=build_patrol_embed(patrol_embed_title), view=PatrolView())
+    aop_message = await aop_channel.send(embed=build_aop_embed(aop_embed_title), view=AOPView())
+    save_session()
+    await interaction.response.send_message("Patrol and AOP voting opened.", ephemeral=True)
+
+
+@tree.command(name="open_patrol_vote")
+async def open_patrol_vote(interaction: discord.Interaction):
+
+    if not admin_check(interaction):
+        await interaction.response.send_message("No permission.", ephemeral=True)
+        return
+
+    global patrol_message, patrol_embed_title, voting_open
+    patrol_votes.clear()
+    cant_make_votes.clear()
+    voting_open = True
+    patrol_embed_title = "🚓 Patrol Attendance"
+
+    patrol_channel = bot.get_channel(PATROL_CHANNEL_ID)
+    role = f"<@&{PING_ROLE_ID}>"
+
+    patrol_message = await patrol_channel.send(role, embed=build_patrol_embed(patrol_embed_title), view=PatrolView())
+    save_session()
+    await interaction.response.send_message("Patrol voting opened.", ephemeral=True)
+
+
+@tree.command(name="open_aop_vote")
+async def open_aop_vote(interaction: discord.Interaction):
+
+    if not admin_check(interaction):
+        await interaction.response.send_message("No permission.", ephemeral=True)
+        return
+
+    global aop_message, aop_embed_title, voting_open
+    aop_votes.clear()
+    voting_open = True
+    aop_embed_title = "🗺️ AOP Voting"
+
+    aop_channel = bot.get_channel(AOP_CHANNEL_ID)
+
+    aop_message = await aop_channel.send(embed=build_aop_embed(aop_embed_title), view=AOPView())
+    save_session()
+    await interaction.response.send_message("AOP voting opened.", ephemeral=True)
 
 
 @tree.command(name="override_patrol_time")
+@discord.app_commands.autocomplete(time=time_autocomplete)
 async def override_patrol_time(interaction: discord.Interaction, time:str):
 
     if not admin_check(interaction):
         await interaction.response.send_message("No permission.", ephemeral=True)
         return
+
+    global confirmed_start_time
+    confirmed_start_time = time
 
     embed = styled_embed(
         "⚠️ Patrol Override",
@@ -792,11 +1045,24 @@ async def override_patrol_time(interaction: discord.Interaction, time:str):
         discord.Color.gold()
     )
 
-    await interaction.response.send_message("Override sent.", ephemeral=True)
     await bot.get_channel(PATROL_CHANNEL_ID).send(embed=embed)
+
+    if announcement_message:
+        old_embed = announcement_message.embeds[0]
+        desc = old_embed.description or ""
+        desc = "\n".join(
+            f"🕐 **Start Time:** {time}" if line.startswith("🕐") else line
+            for line in desc.split("\n")
+        )
+        new_embed = styled_embed("🚓 Tonight's Patrol is Confirmed!", desc, discord.Color.green())
+        await announcement_message.edit(embed=new_embed)
+
+    save_session()
+    await interaction.response.send_message("Override sent.", ephemeral=True)
 
 
 @tree.command(name="override_aop")
+@discord.app_commands.autocomplete(area=current_map_area_autocomplete)
 async def override_aop(interaction: discord.Interaction, area: str):
 
     if not admin_check(interaction):
@@ -809,8 +1075,28 @@ async def override_aop(interaction: discord.Interaction, area: str):
         discord.Color.gold()
     )
 
-    await interaction.response.send_message("AOP override sent.", ephemeral=True)
     await bot.get_channel(AOP_CHANNEL_ID).send(embed=embed)
+
+    if announcement_message:
+        old_embed = announcement_message.embeds[0]
+        desc = old_embed.description or ""
+        lines = desc.split("\n")
+        new_lines = []
+        for line in lines:
+            if line.startswith("📍"):
+                new_lines.append(f"📍 **AOP:** {area}")
+            else:
+                new_lines.append(line)
+        # If no AOP line existed, add it after start time
+        if not any(l.startswith("📍") for l in lines):
+            for i, line in enumerate(new_lines):
+                if line.startswith("🕐"):
+                    new_lines.insert(i + 1, f"📍 **AOP:** {area}")
+                    break
+        new_embed = styled_embed("🚓 Tonight's Patrol is Confirmed!", "\n".join(new_lines), discord.Color.green())
+        await announcement_message.edit(embed=new_embed)
+
+    await interaction.response.send_message("AOP override sent.", ephemeral=True)
 
 
 @tree.command(name="force_stats")
@@ -1169,27 +1455,43 @@ async def aop_breakdown(interaction: discord.Interaction, period: Period = Perio
 @tree.command(name="maplc")
 async def map_lc(interaction: discord.Interaction):
 
-    global current_map
+    global current_map, aop_message
 
     if not admin_check(interaction):
         return
 
     current_map = "LC"
 
-    await interaction.response.send_message("Map switched to LC.")
+    msg = "Map switched to LC."
+    if voting_open and aop_message:
+        aop_votes.clear()
+        new_view = AOPView()
+        await aop_message.edit(embed=build_aop_embed(aop_embed_title), view=new_view)
+        msg += " AOP votes have been reset for the new map."
+
+    save_session()
+    await interaction.response.send_message(msg)
 
 
 @tree.command(name="mapls")
 async def map_ls(interaction: discord.Interaction):
 
-    global current_map
+    global current_map, aop_message
 
     if not admin_check(interaction):
         return
 
     current_map = "LS"
 
-    await interaction.response.send_message("Map switched to LS.")
+    msg = "Map switched to LS."
+    if voting_open and aop_message:
+        aop_votes.clear()
+        new_view = AOPView()
+        await aop_message.edit(embed=build_aop_embed(aop_embed_title), view=new_view)
+        msg += " AOP votes have been reset for the new map."
+
+    save_session()
+    await interaction.response.send_message(msg)
 
 
 # ---------------- PAGINATION ----------------
@@ -1337,6 +1639,7 @@ async def test_patrol_vote(interaction: discord.Interaction):
 
     role = f"<@&{PING_ROLE_ID}>"
     patrol_message = await patrol_channel.send(role, embed=build_patrol_embed(patrol_embed_title), view=PatrolView())
+    save_session()
     await interaction.response.send_message("Test patrol vote posted.", ephemeral=True)
 
 
@@ -1353,6 +1656,7 @@ async def test_aop_vote(interaction: discord.Interaction):
     aop_channel = bot.get_channel(AOP_CHANNEL_ID)
 
     aop_message = await aop_channel.send(embed=build_aop_embed(aop_embed_title), view=AOPView())
+    save_session()
     await interaction.response.send_message("Test AOP vote posted.", ephemeral=True)
 
 
@@ -1404,11 +1708,7 @@ async def test_close_votes(interaction: discord.Interaction):
 
     embed = styled_embed("✅ Patrol Confirmed (TEST)", color=discord.Color.green())
     embed.add_field(name="🕐 Start Time", value=f"```{start_time}```", inline=True)
-    embed.add_field(name="📍 AOP", value=f"```{selected_aop}```", inline=True)
-    embed.add_field(name="\u200b", value="\u200b", inline=True)
     embed.add_field(name="👥 Attending", value=f"```{len(patrol_votes)}```", inline=True)
-    embed.add_field(name="📊 Minimum", value=f"```{MINIMUM_PATROL}```", inline=True)
-    embed.add_field(name="❌ Can't Make It", value=f"```{len(cant_make_votes)}```", inline=True)
 
     await patrol_channel.send(embed=embed)
     await interaction.response.send_message(f"Test close votes: patrol confirmed at {start_time}, AOP: {selected_aop}.", ephemeral=True)
@@ -1457,6 +1757,7 @@ async def test_cancel(interaction: discord.Interaction):
 
 
 @tree.command(name="test_override_time")
+@discord.app_commands.autocomplete(time=time_autocomplete)
 async def test_override_time(interaction: discord.Interaction, time: str):
 
     if not admin_check(interaction):
@@ -1474,6 +1775,7 @@ async def test_override_time(interaction: discord.Interaction, time: str):
 
 
 @tree.command(name="test_override_aop")
+@discord.app_commands.autocomplete(area=current_map_area_autocomplete)
 async def test_override_aop(interaction: discord.Interaction, area: str):
 
     if not admin_check(interaction):
