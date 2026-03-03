@@ -54,9 +54,22 @@ attendance INTEGER
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS aop_stats(
-area TEXT
+area TEXT,
+day TEXT
 )
 """)
+
+cursor.execute("PRAGMA table_info(aop_stats)")
+aop_columns = [col[1] for col in cursor.fetchall()]
+if "day" not in aop_columns:
+    cursor.execute("ALTER TABLE aop_stats ADD COLUMN day TEXT")
+
+cursor.execute("PRAGMA table_info(patrol_days)")
+patrol_columns = [col[1] for col in cursor.fetchall()]
+if "cancelled" not in patrol_columns:
+    cursor.execute("ALTER TABLE patrol_days ADD COLUMN cancelled INTEGER DEFAULT 0")
+if "cant_make" not in patrol_columns:
+    cursor.execute("ALTER TABLE patrol_days ADD COLUMN cant_make INTEGER DEFAULT 0")
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS settings(
@@ -94,6 +107,9 @@ cant_make_votes = set()
 aop_votes = {}
 confirmed_start_time = None
 
+patrol_message = None
+aop_message = None
+
 current_map = "LC"
 
 mapLS = [
@@ -114,6 +130,64 @@ mapLC = [
 "Halton Region",
 "Steeltown"
 ]
+
+
+# ---------------- LIVE STATS ----------------
+
+def build_patrol_embed(title="🚓 Patrol Attendance"):
+
+    desc = "Vote for tonight's patrol start time.\nMinimum **4 members required**.\n"
+
+    slot_voters = {time: [] for time in time_slots}
+    for user_id, time in patrol_votes.items():
+        slot_voters[time].append(user_id)
+
+    for time in time_slots:
+        voters = slot_voters[time]
+        if voters:
+            mentions = ", ".join(f"<@{uid}>" for uid in voters)
+            desc += f"\n**{time}** ({len(voters)}): {mentions}"
+        else:
+            desc += f"\n**{time}** (0)"
+
+    if cant_make_votes:
+        mentions = ", ".join(f"<@{uid}>" for uid in cant_make_votes)
+        desc += f"\n\n❌ **Can't Make It** ({len(cant_make_votes)}): {mentions}"
+
+    desc += f"\n\n**Total Attending:** {len(patrol_votes)}"
+
+    return discord.Embed(title=title, description=desc, color=discord.Color.blue())
+
+
+def build_aop_embed(title="🗺️ AOP Voting"):
+
+    desc = "Vote for tonight's patrol area.\n"
+
+    options = mapLC if current_map == "LC" else mapLS
+    total = len(aop_votes)
+    area_counts = {area: 0 for area in options}
+    for area in aop_votes.values():
+        if area in area_counts:
+            area_counts[area] += 1
+
+    for area in options:
+        count = area_counts[area]
+        pct = (count / total * 100) if total > 0 else 0
+        desc += f"\n**{area}** — {count} votes ({pct:.0f}%)"
+
+    desc += f"\n\n**Total Votes:** {total}"
+
+    return discord.Embed(title=title, description=desc, color=discord.Color.purple())
+
+
+async def update_patrol_message():
+    if patrol_message:
+        await patrol_message.edit(embed=build_patrol_embed())
+
+
+async def update_aop_message():
+    if aop_message:
+        await aop_message.edit(embed=build_aop_embed())
 
 
 # ---------------- VIEWS ----------------
@@ -147,6 +221,7 @@ class PatrolButton(discord.ui.Button):
         record_stat(interaction.user.id, "patrol_votes")
 
         await interaction.response.send_message(f"You voted for **{self.time}**.", ephemeral=True)
+        await update_patrol_message()
 
 
 class CantMakeButton(discord.ui.Button):
@@ -166,6 +241,7 @@ class CantMakeButton(discord.ui.Button):
         record_stat(interaction.user.id, "cant_make")
 
         await interaction.response.send_message("You marked **Can't Make It**.", ephemeral=True)
+        await update_patrol_message()
 
 
 class AOPView(discord.ui.View):
@@ -197,6 +273,7 @@ class AOPButton(discord.ui.Button):
         record_stat(interaction.user.id, "aop_votes")
 
         await interaction.response.send_message(f"You voted for **{self.option}**.", ephemeral=True)
+        await update_aop_message()
 
 
 # ---------------- BOT READY ----------------
@@ -224,7 +301,7 @@ async def scheduler():
 
     if now.hour == 8 and now.minute == 0:
 
-        global confirmed_start_time
+        global confirmed_start_time, patrol_message, aop_message
         patrol_votes.clear()
         cant_make_votes.clear()
         aop_votes.clear()
@@ -235,21 +312,8 @@ async def scheduler():
 
         role = f"<@&{PING_ROLE_ID}>"
 
-        embed = discord.Embed(
-            title="🚓 Patrol Attendance",
-            description="Vote for tonight's patrol start time.\nMinimum **4 members required**.",
-            color=discord.Color.blue()
-        )
-
-        await patrol_channel.send(role, embed=embed, view=PatrolView())
-
-        aop_embed = discord.Embed(
-            title="🗺️ AOP Voting",
-            description="Vote for tonight's patrol area.",
-            color=discord.Color.purple()
-        )
-
-        await aop_channel.send(embed=aop_embed, view=AOPView())
+        patrol_message = await patrol_channel.send(role, embed=build_patrol_embed(), view=PatrolView())
+        aop_message = await aop_channel.send(embed=build_aop_embed(), view=AOPView())
 
 
 # ---------------- CLOSE VOTES ----------------
@@ -281,6 +345,10 @@ async def close_votes():
 
         if not start_time:
 
+            today = now.strftime("%Y-%m-%d")
+            cursor.execute("INSERT INTO patrol_days(day, attendance, cancelled, cant_make) VALUES(?, ?, 1, ?)", (today, len(patrol_votes), len(cant_make_votes)))
+            conn.commit()
+
             embed = discord.Embed(
                 title="❌ Patrol Cancelled",
                 description="Minimum attendance not reached.",
@@ -307,8 +375,8 @@ async def close_votes():
 
 
         today = now.strftime("%Y-%m-%d")
-        cursor.execute("INSERT INTO patrol_days(day, attendance) VALUES(?, ?)", (today, len(patrol_votes)))
-        cursor.execute("INSERT INTO aop_stats(area) VALUES(?)", (selected_aop,))
+        cursor.execute("INSERT INTO patrol_days(day, attendance, cancelled, cant_make) VALUES(?, ?, 0, ?)", (today, len(patrol_votes), len(cant_make_votes)))
+        cursor.execute("INSERT INTO aop_stats(area, day) VALUES(?, ?)", (selected_aop, today))
 
         for user_id in patrol_votes:
             record_stat(user_id, "patrol_attended")
@@ -490,11 +558,8 @@ async def server_stats(interaction: discord.Interaction):
         await interaction.response.send_message("No permission.", ephemeral=True)
         return
 
-    cursor.execute("SELECT day, attendance FROM patrol_days")
+    cursor.execute("SELECT day, attendance, cancelled, cant_make FROM patrol_days")
     patrol_rows = cursor.fetchall()
-
-    cursor.execute("SELECT area FROM aop_stats")
-    aop_rows = cursor.fetchall()
 
     cursor.execute("SELECT COUNT(*) FROM members")
     total_members = cursor.fetchone()[0]
@@ -503,20 +568,18 @@ async def server_stats(interaction: discord.Interaction):
         await interaction.response.send_message("No patrol data yet.", ephemeral=True)
         return
 
-    # Day of week breakdown
     day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     day_counts = {d: 0 for d in day_names}
     day_attendance = {d: [] for d in day_names}
 
-    for day_str, attendance in patrol_rows:
+    for day_str, attendance, cancelled, cant_make in patrol_rows:
         dt = datetime.datetime.strptime(day_str, "%Y-%m-%d")
         name = day_names[dt.weekday()]
         day_counts[name] += 1
-        day_attendance[name] += [attendance]
+        day_attendance[name].append(attendance)
 
     active_days = {d: c for d, c in day_counts.items() if c > 0}
     sorted_days = sorted(active_days.items(), key=lambda x: x[1], reverse=True)
-
     inactive_days = [d for d, c in day_counts.items() if c == 0]
 
     day_lines = []
@@ -524,17 +587,8 @@ async def server_stats(interaction: discord.Interaction):
         avg = sum(day_attendance[name]) / len(day_attendance[name])
         day_lines.append(f"**{name}** — {count} patrols, avg {avg:.1f} members")
 
-    # AOP popularity
-    aop_counts = {}
-    for (area,) in aop_rows:
-        aop_counts[area] = aop_counts.get(area, 0) + 1
-
-    sorted_aops = sorted(aop_counts.items(), key=lambda x: x[1], reverse=True)
-    aop_lines = [f"**{area}** — {count} times" for area, count in sorted_aops]
-
-    # Overall stats
     total_patrols = len(patrol_rows)
-    all_attendance = [a for _, a in patrol_rows]
+    all_attendance = [a for _, a, _, _ in patrol_rows]
     avg_attendance = sum(all_attendance) / total_patrols
     highest = max(all_attendance)
     lowest = min(all_attendance)
@@ -569,9 +623,136 @@ async def server_stats(interaction: discord.Interaction):
             inline=False
         )
 
+    await interaction.response.send_message(embed=embed)
+
+
+@tree.command(name="activity_stats")
+async def activity_stats(interaction: discord.Interaction):
+
+    if not admin_check(interaction):
+        await interaction.response.send_message("No permission.", ephemeral=True)
+        return
+
+    cursor.execute("SELECT day, attendance, cancelled, cant_make FROM patrol_days")
+    patrol_rows = cursor.fetchall()
+
+    if not patrol_rows:
+        await interaction.response.send_message("No patrol data yet.", ephemeral=True)
+        return
+
+    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    day_counts = {d: 0 for d in day_names}
+    day_attendance = {d: [] for d in day_names}
+    day_cancelled = {d: 0 for d in day_names}
+    day_cant_make = {d: [] for d in day_names}
+
+    for day_str, attendance, cancelled, cant_make in patrol_rows:
+        dt = datetime.datetime.strptime(day_str, "%Y-%m-%d")
+        name = day_names[dt.weekday()]
+        day_counts[name] += 1
+        day_attendance[name].append(attendance)
+        if cancelled:
+            day_cancelled[name] += 1
+        day_cant_make[name].append(cant_make or 0)
+
+    active_days = {d: c for d, c in day_counts.items() if c > 0}
+    sorted_days = sorted(active_days.items(), key=lambda x: x[1], reverse=True)
+
+    total_patrols = len(patrol_rows)
+    total_cancelled = sum(1 for _, _, c, _ in patrol_rows if c)
+    total_active = total_patrols - total_cancelled
+    total_cant_make = sum(cm or 0 for _, _, _, cm in patrol_rows)
+    total_responses = sum(a + (cm or 0) for _, a, _, cm in patrol_rows)
+    noshow_pct = (total_cant_make / total_responses * 100) if total_responses > 0 else 0
+
+    embed = discord.Embed(
+        title="📉 Activity & No-Show Stats",
+        color=discord.Color.orange()
+    )
+
     embed.add_field(
-        name="AOP Popularity",
-        value="\n".join(aop_lines) if aop_lines else "No data",
+        name="Overview",
+        value=(
+            f"Total Patrols: **{total_patrols}** ({total_active} active, {total_cancelled} cancelled)\n"
+            f"Cancellation Rate: **{(total_cancelled / total_patrols * 100) if total_patrols > 0 else 0:.0f}%**\n"
+            f"No-Show Rate: **{noshow_pct:.0f}%** ({total_cant_make} can't make it out of {total_responses} responses)"
+        ),
+        inline=False
+    )
+
+    day_lines = []
+    for name, count in sorted_days:
+        total_cm = sum(day_cant_make[name])
+        total_resp = sum(day_attendance[name]) + total_cm
+        rate = (total_cm / total_resp * 100) if total_resp > 0 else 0
+        cancel_rate = (day_cancelled[name] / count * 100) if count > 0 else 0
+        day_lines.append(f"**{name}** — {cancel_rate:.0f}% cancelled, {rate:.0f}% no-show rate")
+
+    embed.add_field(
+        name="Breakdown by Day of Week",
+        value="\n".join(day_lines) if day_lines else "No data",
+        inline=False
+    )
+
+    await interaction.response.send_message(embed=embed)
+
+
+@tree.command(name="aop_breakdown")
+async def aop_breakdown(interaction: discord.Interaction):
+
+    if not admin_check(interaction):
+        await interaction.response.send_message("No permission.", ephemeral=True)
+        return
+
+    cursor.execute("SELECT area, day FROM aop_stats")
+    aop_rows = cursor.fetchall()
+
+    if not aop_rows:
+        await interaction.response.send_message("No AOP data yet.", ephemeral=True)
+        return
+
+    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+    # Overall popularity
+    aop_counts = {}
+    for area, _ in aop_rows:
+        aop_counts[area] = aop_counts.get(area, 0) + 1
+
+    total = len(aop_rows)
+    sorted_aops = sorted(aop_counts.items(), key=lambda x: x[1], reverse=True)
+    aop_lines = [f"**{area}** — {count} times ({count / total * 100:.0f}%)" for area, count in sorted_aops]
+
+    # By day of week
+    aop_day_data = {}
+    for area, day_str in aop_rows:
+        if not day_str:
+            continue
+        dt = datetime.datetime.strptime(day_str, "%Y-%m-%d")
+        dow = day_names[dt.weekday()]
+        if area not in aop_day_data:
+            aop_day_data[area] = {}
+        aop_day_data[area][dow] = aop_day_data[area].get(dow, 0) + 1
+
+    aop_day_lines = []
+    for area in sorted(aop_day_data.keys()):
+        days = aop_day_data[area]
+        top_day = max(days, key=days.get)
+        aop_day_lines.append(f"**{area}** — most popular on **{top_day}** ({days[top_day]} times)")
+
+    embed = discord.Embed(
+        title="🗺️ AOP Breakdown",
+        color=discord.Color.purple()
+    )
+
+    embed.add_field(
+        name="Overall Popularity",
+        value="\n".join(aop_lines),
+        inline=False
+    )
+
+    embed.add_field(
+        name="Most Popular Day per AOP",
+        value="\n".join(aop_day_lines) if aop_day_lines else "No data",
         inline=False
     )
 
@@ -673,16 +854,11 @@ async def test_patrol_vote(interaction: discord.Interaction):
         await interaction.response.send_message("No permission.", ephemeral=True)
         return
 
+    global patrol_message
     patrol_channel = bot.get_channel(PATROL_CHANNEL_ID)
 
-    embed = discord.Embed(
-        title="🚓 Patrol Attendance (TEST)",
-        description="Vote for tonight's patrol start time.\nMinimum **4 members required**.",
-        color=discord.Color.blue()
-    )
-
     role = f"<@&{PING_ROLE_ID}>"
-    await patrol_channel.send(role, embed=embed, view=PatrolView())
+    patrol_message = await patrol_channel.send(role, embed=build_patrol_embed("🚓 Patrol Attendance (TEST)"), view=PatrolView())
     await interaction.response.send_message("Test patrol vote posted.", ephemeral=True)
 
 
@@ -693,15 +869,10 @@ async def test_aop_vote(interaction: discord.Interaction):
         await interaction.response.send_message("No permission.", ephemeral=True)
         return
 
+    global aop_message
     aop_channel = bot.get_channel(AOP_CHANNEL_ID)
 
-    embed = discord.Embed(
-        title="🗺️ AOP Voting (TEST)",
-        description="Vote for tonight's patrol area.",
-        color=discord.Color.purple()
-    )
-
-    await aop_channel.send(embed=embed, view=AOPView())
+    aop_message = await aop_channel.send(embed=build_aop_embed("🗺️ AOP Voting (TEST)"), view=AOPView())
     await interaction.response.send_message("Test AOP vote posted.", ephemeral=True)
 
 
