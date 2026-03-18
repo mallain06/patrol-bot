@@ -417,7 +417,8 @@ class PatrolButton(discord.ui.Button):
 
         super().__init__(
             label=label,
-            style=discord.ButtonStyle.primary
+            style=discord.ButtonStyle.primary,
+            custom_id=f"patrol_{label}",
         )
 
         self.time = label
@@ -447,7 +448,8 @@ class CantMakeButton(discord.ui.Button):
         super().__init__(
             label="Can't Make It",
             emoji="❌",
-            style=discord.ButtonStyle.danger
+            style=discord.ButtonStyle.danger,
+            custom_id="patrol_cant_make",
         )
 
     async def callback(self, interaction: discord.Interaction):
@@ -486,7 +488,8 @@ class AOPButton(discord.ui.Button):
 
         super().__init__(
             label=label,
-            style=discord.ButtonStyle.secondary
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"aop_{label}",
         )
 
         self.option = label
