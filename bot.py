@@ -261,12 +261,12 @@ mapLS = [
 ]
 
 mapLC = [
-"Toronto Downtown",
-"Toronto Etobicoke",
-"York Region",
+"City of Toronto",
 "Peel Region",
+"York Region",
+"Durham Region",
 "Halton Region",
-"Steeltown"
+"City of Hamilton",
 ]
 
 
