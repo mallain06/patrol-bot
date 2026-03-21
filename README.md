@@ -83,6 +83,13 @@ City of Orillia, City of Barrie, Simcoe County Central, Kawartha Lakes, Peterbor
 | `STATS_CHANNEL_ID` | Channel for biweekly stats leaderboard and inactivity reports |
 | `ANNOUNCEMENT_CHANNEL_ID` | Channel for patrol confirmed/cancelled announcements |
 | `ADMIN_COMMAND_CHANNEL` | Channel where admin commands are allowed |
+| `WELCOME_CHANNEL_ID` | Channel for welcome messages when members join |
+| `GOODBYE_CHANNEL_ID` | Channel for goodbye messages when members leave |
+| `RULES_CHANNEL_ID` | Rules channel linked in welcome message |
+| `SERVER_LINKS_CHANNEL_ID` | Server links channel linked in welcome message |
+| `RESOURCES_CHANNEL_ID` | Resources channel linked in welcome message |
+| `GENERAL_CHANNEL_ID` | General channel linked in welcome message |
+| `SUPPORT_CHANNEL_ID` | Support ticket channel linked in welcome message |
 | `PING_ROLE_ID` | Role to ping for voting and briefing reminders |
 | `ADMIN_ROLE_ID` | Role required to use admin commands |
 | `DATABASE_PATH` | Path to SQLite database (default: `patrol_stats.db`) |
@@ -102,6 +109,13 @@ docker run -d \
   -e STATS_CHANNEL_ID=123456789 \
   -e ANNOUNCEMENT_CHANNEL_ID=123456789 \
   -e ADMIN_COMMAND_CHANNEL=123456789 \
+  -e WELCOME_CHANNEL_ID=123456789 \
+  -e GOODBYE_CHANNEL_ID=123456789 \
+  -e RULES_CHANNEL_ID=123456789 \
+  -e SERVER_LINKS_CHANNEL_ID=123456789 \
+  -e RESOURCES_CHANNEL_ID=123456789 \
+  -e GENERAL_CHANNEL_ID=123456789 \
+  -e SUPPORT_CHANNEL_ID=123456789 \
   -e PING_ROLE_ID=123456789 \
   -e ADMIN_ROLE_ID=123456789 \
   -v patrol-data:/app/data \
