@@ -24,6 +24,82 @@ class AdminCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    @app_commands.command(name="help", description="Show all admin commands and bot features")
+    async def help_menu(self, interaction: discord.Interaction):
+        if not admin_check(interaction):
+            await interaction.response.send_message("No permission.", ephemeral=True)
+            return
+
+        embed = styled_embed("Patrol Bot — Admin Help", "All available admin commands grouped by category.", discord.Color.blue())
+
+        embed.add_field(
+            name="\U0001f5f3\ufe0f Voting Management",
+            value=(
+                "`/open_votes` — Open both patrol and AOP voting\n"
+                "`/open_patrol_vote` — Open only patrol voting\n"
+                "`/open_aop_vote` — Open only AOP voting\n"
+                "`/close_patrol_votes` — Close patrol voting, confirm attendance & start time\n"
+                "`/close_aop_votes` — Close AOP voting, select winning area"
+            ),
+            inline=False
+        )
+
+        embed.add_field(
+            name="\U0001f693 Patrol Control",
+            value=(
+                "`/start_patrol <time> <area>` — Force start patrol with a specific time and area\n"
+                "`/cancel_patrol` — Cancel tonight's patrol\n"
+                "`/override_patrol_time <time>` — Override the confirmed patrol start time\n"
+                "`/override_aop <area>` — Override the confirmed AOP area"
+            ),
+            inline=False
+        )
+
+        embed.add_field(
+            name="\U0001f5fa\ufe0f Map Management",
+            value=(
+                "`/maplc` — Switch map to Liberty City (resets AOP votes)\n"
+                "`/mapls` — Switch map to Los Santos (resets AOP votes)"
+            ),
+            inline=False
+        )
+
+        embed.add_field(
+            name="\U0001f4ca Statistics",
+            value=(
+                "`/force_stats` — Manually post the stats leaderboard\n"
+                "`/user_stats <member> [period]` — View a member's individual stats\n"
+                "`/check_inactive` — List inactive members (past 2 weeks)\n"
+                "`/server_stats [period]` — View overall server statistics\n"
+                "`/activity_stats [period]` — View activity and no-show rates\n"
+                "`/aop_breakdown [period]` — View AOP area popularity breakdown"
+            ),
+            inline=False
+        )
+
+        embed.add_field(
+            name="\u2699\ufe0f Other",
+            value=(
+                "`/clear_stats` — Clear all statistics data (**destructive**)\n"
+                "`/help` — Show this help menu"
+            ),
+            inline=False
+        )
+
+        embed.add_field(
+            name="\U0001f916 Automated Tasks",
+            value=(
+                "These run automatically — no command needed:\n"
+                "\u2022 **8:00 AM** — Opens patrol & AOP voting\n"
+                "\u2022 **6:30 PM** — Closes voting & records attendance\n"
+                "\u2022 **10 min before patrol** — Posts briefing reminder\n"
+                "\u2022 **Every 2 weeks** — Posts stats leaderboard & inactivity check"
+            ),
+            inline=False
+        )
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
     @app_commands.command(name="close_patrol_votes")
     async def close_patrol_votes(self, interaction: discord.Interaction):
         if not admin_check(interaction):
