@@ -145,7 +145,7 @@ def admin_check(interaction):
 
 # ---------------- PAGINATION ----------------
 
-def paginate_lines(lines, max_length=4000):
+def paginate_lines(lines, max_length=1800):
     pages = []
     current = []
     length = 0
