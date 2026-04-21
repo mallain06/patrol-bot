@@ -130,7 +130,7 @@ class StatsCog(commands.Cog):
             reason = get_inactive_reason(m.id)
             lines.append(f"**{i}. {m.display_name}** (<@{m.id}>) \u2014 {reason}")
 
-        await send_paginated(interaction.channel, f"\u26a0\ufe0f Inactive Members ({len(inactive)} total)", lines, discord.Color.red())
+        await send_paginated(self.bot, interaction.channel, f"\u26a0\ufe0f Inactive Members ({len(inactive)} total)", lines, discord.Color.red(), kind="inactivity")
         await interaction.followup.send(f"Found **{len(inactive)}** inactive members.", ephemeral=True)
 
     @app_commands.command(name="server_stats")

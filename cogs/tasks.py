@@ -275,7 +275,7 @@ class TasksCog(commands.Cog):
         cursor.execute("INSERT OR REPLACE INTO settings(key, value) VALUES('last_inactivity_post', ?)", (today,))
         conn.commit()
 
-        await send_paginated(channel, "\u26a0\ufe0f Inactive Members (Last 2 Weeks)", lines, discord.Color.red())
+        await send_paginated(self.bot, channel, "\u26a0\ufe0f Inactive Members (Last 2 Weeks)", lines, discord.Color.red(), kind="inactivity")
 
     async def post_stats_leaderboard(self):
         cursor.execute(
@@ -306,7 +306,7 @@ class TasksCog(commands.Cog):
         cursor.execute("INSERT OR REPLACE INTO settings(key, value) VALUES('last_stats_post', ?)", (today,))
         conn.commit()
 
-        await send_paginated(channel, "\U0001f4ca Biweekly Stats Leaderboard", lines, discord.Color.blue())
+        await send_paginated(self.bot, channel, "\U0001f4ca Biweekly Stats Leaderboard", lines, discord.Color.blue(), kind="stats")
 
 
 async def setup(bot):

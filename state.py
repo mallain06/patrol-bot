@@ -99,3 +99,9 @@ async def load_session(bot):
         bot.add_view(PatrolView(), message_id=patrol_message.id)
     if aop_message:
         bot.add_view(AOPView(), message_id=aop_message.id)
+
+    from helpers import PaginatedEmbedView, _load_paginated
+    for kind in ("stats", "inactivity"):
+        data = _load_paginated(kind)
+        if data and data.get("message_id"):
+            bot.add_view(PaginatedEmbedView(kind), message_id=data["message_id"])
