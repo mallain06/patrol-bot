@@ -5,7 +5,7 @@ A Discord bot for managing daily patrol scheduling, AOP (Area of Patrol) voting,
 ## Features
 
 - **Daily Patrol Voting** — Members vote for a patrol start time each morning. Votes close at 6:30 PM EST with a minimum attendance threshold.
-- **AOP Voting** — Members vote on the patrol area. Supports Liberty County (LC) and Lander State (LS) map sets, switchable by admins.
+- **AOP Voting** — Members vote on the patrol area. Supports Liberty City (LC) and Los Santos (LS) map sets, switchable by admins.
 - **Persistent Session State** — Votes, messages, and voting status survive bot restarts via SQLite persistence. Buttons remain functional after a restart.
 - **Briefing Reminder** — Automatically pings 10 minutes before the confirmed patrol start time to join the briefing voice chat.
 - **Cancel Announcements** — Cancelling a patrol notifies the announcement channel and edits any existing announcement.
@@ -14,6 +14,7 @@ A Discord bot for managing daily patrol scheduling, AOP (Area of Patrol) voting,
 - **Command Autocomplete** — Time slots and area names are suggested as you type in slash commands.
 - **Biweekly Stats Leaderboard** — Posts a ranked leaderboard to the stats channel every 14 days.
 - **Inactivity Tracking** — Automatically detects members who haven't responded in 2 weeks and posts reports.
+- **Welcome & Goodbye Messages** — Automatically sends styled welcome messages (with rules and resources links) to new members, and goodbye messages when members leave.
 - **Admin Commands** — Cancel patrols, override start times/AOP, view per-user and server-wide statistics.
 
 ## Commands
@@ -36,8 +37,8 @@ A Discord bot for managing daily patrol scheduling, AOP (Area of Patrol) voting,
 | `/cancel_patrol` | Cancel tonight's patrol and notify the announcement channel |
 | `/override_patrol_time <time>` | Override the patrol start time |
 | `/override_aop <area>` | Override the AOP |
-| `/maplc` | Switch AOP options to Liberty County (resets AOP votes if open) |
-| `/mapls` | Switch AOP options to Lander State (resets AOP votes if open) |
+| `/maplc` | Switch AOP options to Liberty City (resets AOP votes if open) |
+| `/mapls` | Switch AOP options to Los Santos (resets AOP votes if open) |
 
 ### Statistics
 
@@ -49,6 +50,13 @@ A Discord bot for managing daily patrol scheduling, AOP (Area of Patrol) voting,
 | `/aop_breakdown [period]` | View AOP popularity split by map (LC and LS), with per-day favorites and unused areas |
 | `/check_inactive` | List members with the ping role who haven't responded in the last 2 weeks |
 | `/force_stats` | Manually post the biweekly stats leaderboard |
+
+### Other
+
+| Command | Description |
+|---|---|
+| `/help` | Show all admin commands and bot features |
+| `/clear_stats` | Clear all statistics data (**destructive**) |
 
 All stats commands support an optional `period` parameter: **All Time** (default) or **Last 2 Weeks**.
 
@@ -64,11 +72,11 @@ All commands require the admin role and must be used in the admin command channe
 
 ## Maps
 
-### Liberty County (LC)
-Toronto Downtown, Toronto Etobicoke, York Region, Peel Region, Halton Region, Steeltown
+### Liberty City (LC)
+City of Toronto, Peel Region, York Region, Durham Region, Halton Region, City of Hamilton
 
-### Lander State (LS)
-City of Orillia, City of Barrie, Simcoe County Central, Kawartha Lakes, Peterborough, Northumberland, Prince Edward County
+### Los Santos (LS)
+City of Orillia, City Of Barrie, Simcoe County Central, Kawartha Lakes, Peterborough, Northumberland, Prince Edward County
 
 ## Environment Variables
 
